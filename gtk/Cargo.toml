@@ -1,0 +1,11 @@
+[package]
+name = "recipe_visualizer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# FATAL: after v4_12 the gtk4 library can't be found
+gtk = { version = "^0.8", package="gtk4", features = ["v4_12"] }
+petgraph = "0.6.5"

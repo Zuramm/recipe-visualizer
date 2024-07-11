@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "visualizer",
+    "gtk",
+    "svg",
+]

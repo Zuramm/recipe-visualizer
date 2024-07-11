@@ -1,0 +1,13 @@
+.step {
+    font-family: "serif";
+}
+
+.step .title {
+    font-size: large;
+    font-weight: bold;
+}
+
+.step .note {
+    font-style: italic;
+}
+
