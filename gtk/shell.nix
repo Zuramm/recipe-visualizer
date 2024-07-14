@@ -1,14 +1,16 @@
-let
-  nixpkgs = fetchTarball "https://github.com/NixOS/nixpkgs/tarball/nixos-23.11";
-  pkgs = import nixpkgs { config = {}; overlays = []; };
-in
-
+{
+  pkgs ? import <nixpkgs> { },
+}:
 pkgs.mkShell {
-  packages = with pkgs; [
+  name = "recipe-gtk";
+
+  nativeBuildInputs = with pkgs.buildPackages; [
+    bacon
     cargo
+    clippy
     gtk4
     pkg-config
     rust-analyzer
-    bacon
+    rustfmt
   ];
 }

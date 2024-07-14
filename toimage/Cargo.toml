@@ -1,14 +1,12 @@
 [package]
-name = "visualizer"
+name = "toimage"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-petgraph = "0.6.5"
-serde = { version = "1.0.204", features = ["derive"] }
+cairo-rs = { version = "0.20.0", features = ["png"] }
+ron = "0.8.1"
 thiserror = "1.0.62"
-
-[dev-dependencies]
-pretty_assertions = "1.4.0"
+visualizer = { version = "0.1.0", path = "../visualizer" }

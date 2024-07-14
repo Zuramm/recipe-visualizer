@@ -1,0 +1,15 @@
+(
+    name: "Recipe with single item",
+    steps: [
+        (
+            time_s: 300,
+            title: "Peel and chop finely",
+            note: None,
+            ingredients: [
+                "garlic",
+            ],
+            utensils: [],
+            requires: [],
+        ),
+    ],
+)

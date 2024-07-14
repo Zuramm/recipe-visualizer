@@ -1,23 +1,35 @@
-#[derive(Debug, Default, Clone, PartialEq)]
-struct Step {
-    time_s: usize,
-    title: String,
-    note: Option<String>,
-    ingredients: Vec<String>,
-    utensils: Vec<String>,
+#![allow(dead_code)]
+use serde::{Deserialize, Serialize};
+
+pub mod layout;
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Step {
+    pub time_s: usize,
+    pub title: String,
+    pub note: Option<String>,
+    pub ingredients: Vec<String>,
+    pub utensils: Vec<String>,
+    pub requires: Vec<usize>,
 }
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Recipe {
+    pub name: String,
+    pub steps: Vec<Step>,
+}
+
+impl Recipe {
+    pub fn edges(&self) -> Vec<(usize, usize)> {
+        self.steps
+            .iter()
+            .enumerate()
+            .flat_map(|(i, step)| step.requires.iter().copied().map(move |j| (i, j)))
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
 }

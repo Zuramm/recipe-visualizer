@@ -1,234 +1,507 @@
-use core::{fmt, cmp::PartialEq};
+use core::fmt::Debug;
+use std::{
+    cmp::Ordering,
+    ops::{Add, AddAssign, Sub, SubAssign},
+};
 
-use petgraph::{algo::bellman_ford, prelude::*, visit::NodeIndexable};
+use petgraph::{
+    algo::{
+        bellman_ford::{bellman_ford, Paths},
+        is_cyclic_directed,
+    },
+    prelude::*,
+    visit::{depth_first_search, Control, DfsEvent, NodeIndexable},
+};
+use thiserror::Error;
 
-pub trait VisuallyBounded: fmt::Debug {
-    fn visual_left(&self) -> i32;
-    fn set_visual_left(&mut self, value: i32);
-
-    fn visual_top(&self) -> i32;
-    fn set_visual_top(&mut self, value: i32);
-
-    fn visual_width(&self) -> i32;
-    fn set_visual_width(&mut self, value: i32);
-
-    fn visual_height(&self) -> i32;
-    fn set_visual_height(&mut self, value: i32);
-
-    fn visual_right(&self) -> i32 {
-        self.visual_left() + self.visual_width()
-    }
-
-    fn visual_bottom(&self) -> i32 {
-        self.visual_top() + self.visual_height()
-    }
-
-    fn intersects(&self, other: &Self) -> bool;
+pub trait VisuallySized<Coordinates> {
+    fn get_width(&self) -> Coordinates;
+    fn get_height(&self) -> Coordinates;
 }
 
-pub trait Timed: fmt::Debug {
-    fn time_in_minutes(&self) -> f64;
-
-    fn time_in_units(&self) -> i32;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rect<Coordinates> {
+    pub x: Coordinates,
+    pub y: Coordinates,
+    pub width: Coordinates,
+    pub height: Coordinates,
 }
 
-fn create_graph<'a, NodeWeight>(
-    nodes: &'a mut [NodeWeight],
-    edges: &[(usize, usize)],
-) -> DiGraph<&'a mut NodeWeight, f64>
+impl<Coordinates> Rect<Coordinates> {
+    pub fn new(x: Coordinates, y: Coordinates, width: Coordinates, height: Coordinates) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+impl<Coordinates: Copy> Rect<Coordinates> {
+    pub fn top(&self) -> Coordinates {
+        self.y
+    }
+
+    pub fn left(&self) -> Coordinates {
+        self.x
+    }
+}
+
+impl<Coordinates: Copy + Add<Output = Coordinates>> Rect<Coordinates> {
+    pub fn bottom(&self) -> Coordinates {
+        self.y + self.height
+    }
+
+    pub fn right(&self) -> Coordinates {
+        self.x + self.width
+    }
+}
+
+impl<Coordinates: Copy + Sub<Output = Coordinates>> Rect<Coordinates> {
+    pub fn from_sides(
+        left: Coordinates,
+        top: Coordinates,
+        right: Coordinates,
+        bottom: Coordinates,
+    ) -> Self {
+        Self {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        }
+    }
+}
+
+fn min<T>(a: T, b: T) -> Option<T>
 where
-    NodeWeight: VisuallyBounded + Timed,
+    T: PartialOrd,
 {
-    let mut graph = DiGraph::<&mut NodeWeight, f64>::new();
+    a.partial_cmp(&b).map(|ord| match ord {
+        Ordering::Greater => b,
+        _ => a,
+    })
+}
+
+fn max<T>(a: T, b: T) -> Option<T>
+where
+    T: PartialOrd,
+{
+    a.partial_cmp(&b).map(|ord| match ord {
+        Ordering::Less => b,
+        _ => a,
+    })
+}
+
+impl<Coordinates: Default + PartialOrd> Rect<Coordinates> {
+    pub fn is_valid(&self) -> bool {
+        let neutral = Coordinates::default();
+        self.width
+            .partial_cmp(&neutral)
+            .map(|ord| ord.is_ge())
+            .unwrap_or(false)
+            && self
+                .height
+                .partial_cmp(&neutral)
+                .map(|ord| ord.is_ge())
+                .unwrap_or(false)
+    }
+}
+
+impl<
+        Coordinates: Default + Copy + Add<Output = Coordinates> + Sub<Output = Coordinates> + PartialOrd,
+    > Rect<Coordinates>
+{
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        let left = max(self.left(), other.left())?;
+        let top = max(self.top(), other.top())?;
+        let right = min(self.right(), other.right())?;
+        let bottom = min(self.bottom(), other.bottom())?;
+        if left <= right && top <= bottom {
+            Some(Self::from_sides(left, top, right, bottom))
+        } else {
+            None
+        }
+    }
+
+    pub fn union(&self, other: &Self) -> Option<Self> {
+        let left = min(self.left(), other.left())?;
+        let top = min(self.top(), other.top())?;
+        let right = max(self.right(), other.right())?;
+        let bottom = max(self.bottom(), other.bottom())?;
+        Some(Self::from_sides(left, top, right, bottom))
+    }
+
+    pub fn bounded(rects: &[Self]) -> Option<Self> {
+        let mut iter = rects.iter();
+        iter.next().map(|first| {
+            iter.fold(first.clone(), |bounds, rect| match bounds.union(rect) {
+                Some(bounds) => bounds,
+                None => bounds.clone(),
+            })
+        })
+    }
+}
+
+fn create_graph<'a, NodeWeight, Coordinates>(
+    nodes: &'a [NodeWeight],
+    edges: &[(usize, usize)],
+) -> DiGraph<&'a NodeWeight, f64>
+where
+    NodeWeight: VisuallySized<Coordinates>,
+    f64: From<Coordinates>,
+{
+    let mut graph = DiGraph::<&NodeWeight, f64>::new();
 
     // initialize arrays and calculate dimensions
-    for (i, node) in nodes.iter_mut().enumerate() {
+    for (i, node) in nodes.iter().enumerate() {
         let id = graph.add_node(node);
         assert_eq!(i, id.index());
     }
 
     for &(from, to) in edges.iter() {
+        let weight = f64::from(nodes[from].get_height());
         let from = graph.from_index(from);
         let to = graph.from_index(to);
-        graph.add_edge(
-            from,
-            to,
-            graph
-                .node_weight(from)
-                .map_or(-1.0, |node| node.time_in_minutes() * -1.0),
-        );
+        graph.add_edge(from, to, weight);
     }
 
     graph
 }
 
-pub fn layout<NodeWeight>(nodes: &mut [NodeWeight], edges: &[(usize, usize)], spacing: i32)
-where
-    NodeWeight: fmt::Display + VisuallyBounded + Timed + PartialEq,
-{
-    let mut graph = create_graph(nodes, edges);
-
-    // assume graph is acyclic
-    // and connected
-    // and has one leaf (every path ends in the same node)
-    let roots = graph.node_indices().filter(|&id| {
-        graph
-            .neighbors_directed(id, petgraph::Direction::Incoming)
-            .next()
-            .is_none()
-    });
-
-    let longest_path = roots
-        .map(|id| bellman_ford(&graph, id))
-        .filter_map(|res| res.ok())
-        .min_by(|a, b| {
-            match (
-                a.distances.iter().copied().min_by(f64::total_cmp),
-                b.distances.iter().copied().min_by(f64::total_cmp),
-            ) {
-                (Some(min_a), Some(min_b)) => min_a.total_cmp(&min_b),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
+fn get_and_remove_longest_path(
+    paths: &mut Paths<NodeIndex<u32>, f64>,
+) -> Option<Vec<NodeIndex<u32>>> {
+    paths
+        .distances
+        .iter()
+        .zip(paths.predecessors.iter())
+        .enumerate()
+        .map(|(i, (dist, pred))| (i, dist, pred))
+        .filter(|(_, dist, pred)| dist.is_finite() && pred.is_some())
+        // NOTE: To prefer nodes, which have been defined first, when the distances are equal we do
+        // min_by and reverse the arguments. This effectivly sorts from farthest to closest.
+        .min_by(|a, b| b.1.partial_cmp(a.1).unwrap())
+        .map(|(leaf, _, _)| leaf)
+        .map(|leaf| {
+            let mut res = vec![NodeIndex::new(leaf)];
+            while let Some(node) = paths.predecessors[res.last().unwrap().index()] {
+                res.push(node);
             }
-        });
 
-    let root_idx_path = longest_path.and_then(|path| {
-        let end = path
-            .distances
-            .iter()
-            .copied()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.total_cmp(b))
-            .map(|(end, _)| end);
-
-        end.map(NodeIndex::new)
-            .map(|index| layout_path(&mut graph, path, index, spacing))
-    });
-
-    root_idx_path.map(|mut root_idx_path| {
-        println!("root path:");
-        println!(
-            "{:?}",
-            root_idx_path
-                .iter()
-                .map(|idx| idx.index())
-                .collect::<Vec<_>>()
-        );
-        println!();
-
-        root_idx_path.reverse();
-        let mut pontential_branches = root_idx_path;
-
-        while let Some(idx) = pontential_branches.pop() {
-            loop {
-                println!("node {}:", idx.index());
-                let roots = graph.node_indices().filter(|&id| {
-                    graph
-                        .neighbors_directed(id, petgraph::Direction::Incoming)
-                        .next()
-                        .is_none()
-                        && graph
-                            .neighbors_directed(id, petgraph::Direction::Outgoing)
-                            .next()
-                            .is_some()
-                });
-                let longest_path = roots
-                    .map(|id| bellman_ford(&graph, id))
-                    .filter_map(|res| res.ok())
-                    .min_by(|a, b| a.distances[idx.index()].total_cmp(&b.distances[idx.index()]));
-                if longest_path.as_ref().and_then(|paths| paths.predecessors[idx.index()]).is_none() {
-                    break;
+            for node in res.iter() {
+                let predecessor_count = paths
+                    .predecessors
+                    .iter()
+                    .filter(|p| match p {
+                        Some(p) => p == node,
+                        _ => false,
+                    })
+                    .count();
+                if predecessor_count <= 1 {
+                    paths.predecessors[node.index()] = None;
                 }
-                let mut idx_path = longest_path
-                    .map(|longest_path| layout_path(&mut graph, longest_path, idx, spacing))
-                    .unwrap_or(Vec::new());
-
-                println!(
-                    "  path: {:?}",
-                    idx_path
-                        .iter()
-                        .map(|idx| idx.index())
-                        .collect::<Vec<_>>()
-                );
-
-                // last node is the current one which already is covered
-                let _ = idx_path.pop();
-                idx_path.reverse();
-                pontential_branches.append(&mut idx_path);
-
-                println!();
             }
-        }
-    });
+
+            res.reverse();
+            res
+        })
 }
 
-fn layout_path<NodeWeight>(
-    graph: &mut Graph<&mut NodeWeight, f64>,
-    paths: bellman_ford::Paths<NodeIndex, f64>,
-    idx: NodeIndex,
-    spacing: i32,
-) -> Vec<NodeIndex>
+#[derive(Error, Debug)]
+pub enum LayoutError {
+    #[error("graph contains a cycle")]
+    GraphIsCyclic,
+    #[error("graph is disconnected")]
+    GraphIsDisconnected,
+    #[error("graph has multiple roots ({roots:?})]")]
+    GraphHasMultipleRoots { roots: Vec<usize> },
+}
+
+pub fn layout<NodeWeight, Coordinates>(
+    nodes: &[NodeWeight],
+    edges: &[(usize, usize)],
+    spacing: Coordinates,
+) -> Result<Vec<Rect<Coordinates>>, LayoutError>
 where
-    NodeWeight: fmt::Display + VisuallyBounded + Timed + PartialEq,
+    NodeWeight: VisuallySized<Coordinates>,
+    Coordinates: Add<Output = Coordinates>
+        + AddAssign
+        + Sub<Output = Coordinates>
+        + SubAssign
+        + PartialOrd
+        + Default
+        + Copy
+        + Debug,
+    f64: From<Coordinates>,
 {
-    let mut idx_path = Vec::<NodeIndex>::new();
+    let graph = create_graph(nodes, edges);
 
-    let mut current = Some(idx);
-    while let Some(to) = current {
-        idx_path.push(to);
-
-        let from = paths.predecessors[to.index()];
-
-        match (
-            from.and_then(|from| graph.node_weight(from)),
-            graph.node_weight(to),
-        ) {
-            (Some(from), Some(to)) => {
-                let from_time_dist = from.time_in_units();
-                let (pos_x, height) = if from_time_dist < from.visual_height() {
-                    (to.visual_width() + spacing, None)
-                } else {
-                    (
-                        to.visual_left(),
-                        Some(from.visual_top() - to.visual_top() - spacing),
-                    )
-                };
-                let pos_y = to.visual_top() - from_time_dist;
-                Some((pos_x, pos_y, height))
-            }
-            _ => None,
-        }
-        .and_then(|pos| {
-            from.and_then(|from| graph.node_weight_mut(from))
-                .map(|from_weight| {
-                    from_weight.set_visual_left(pos.0);
-                    from_weight.set_visual_top(pos.1);
-                })
+    // TODO: turn these into asserts
+    // assume graph is acyclic
+    if is_cyclic_directed(&graph) {
+        return Err(LayoutError::GraphIsCyclic);
+    }
+    // and connected
+    let root = graph
+        .node_indices()
+        .filter(|&id| {
+            graph
+                .neighbors_directed(id, petgraph::Direction::Incoming)
+                .next()
+                .is_none()
+        })
+        .collect::<Vec<_>>();
+    if root.len() != 1 {
+        return Err(LayoutError::GraphHasMultipleRoots {
+            roots: root.into_iter().map(NodeIndex::index).collect(),
         });
-
-        from.and_then(|from| graph.find_edge(from, to))
-            .map(|edge| graph.remove_edge(edge));
-
-        current = from;
     }
+    let root = root[0];
 
-    println!("  {:?}", idx_path);
-    while let Some(offset) = idx_path.iter()
-        .skip(1)
-        .copied()
-        .filter_map(|idx| graph.node_weight(idx))
-        .flat_map(|path_weight| graph.node_weights().filter(move |graph_weight| &path_weight != graph_weight).map(move |graph_weight| (path_weight, graph_weight)))
-        .find(|(path_weight, graph_weight)| path_weight.intersects(graph_weight))
-        .map(|(path_weight, graph_weight)| graph_weight.visual_right() - path_weight.visual_left() + spacing) {
-        for &idx in idx_path.iter().skip(1) {
-            if let Some(weight) = graph.node_weight_mut(idx) {
-                weight.set_visual_left(weight.visual_left() + offset);
+    let mut paths_from_root = bellman_ford(&graph, root).expect("graph should not be cyclic");
+
+    let mut laid_out: Vec<Option<Rect<Coordinates>>> = vec![None; nodes.len()];
+    laid_out[root.index()] = Some(Rect {
+        x: Coordinates::default(),
+        y: Coordinates::default(),
+        width: graph[root].get_width(),
+        height: graph[root].get_height(),
+    });
+
+    while let Some(path) = get_and_remove_longest_path(&mut paths_from_root) {
+        // get all subsequences of the path, in which no node is laid out
+        let mut segments = path.iter().fold(vec![vec![]], |mut arr, &i| {
+            if laid_out[i.index()].is_some() {
+                if !arr
+                    .last()
+                    .expect("`arr` should be initialized with one element")
+                    .is_empty()
+                {
+                    arr.push(vec![]);
+                }
+            } else {
+                arr.last_mut()
+                    .expect("`arr` should be initialized with one element")
+                    .push((
+                        i,
+                        Rect {
+                            x: Coordinates::default(),
+                            y: Coordinates::default(),
+                            width: graph[i].get_width(),
+                            height: graph[i].get_height(),
+                        },
+                    ));
+            }
+            arr
+        });
+        if segments
+            .last()
+            .expect("`segments` should be initialized with at least one element")
+            .is_empty()
+        {
+            segments
+                .last_mut()
+                .expect("`segments` should be initialized with at least one element")
+                .pop();
+        }
+
+        let mut x = Coordinates::default();
+        let mut y = Coordinates::default();
+        for i in path.iter().copied() {
+            // NOTE: Every node in the path is either laid out or in a segment.
+            //       Thereby changing the y in both cases will work for every node in the path.
+            if let Some(rect) = laid_out[i.index()].clone() {
+                if y > rect.top() {
+                    let diff = y - rect.top();
+                    depth_first_search(&graph, Some(i), |event| {
+                        if let DfsEvent::Discover(node, _) = event {
+                            if let Some(rect) = laid_out[node.index()].as_mut() {
+                                rect.y += diff;
+                            }
+                        }
+                        Control::<()>::Continue
+                    });
+                }
+
+                x = rect.left();
+                y = rect.top();
+
+                y += nodes[i.index()].get_height() + spacing;
+            }
+
+            if let Some((_, sr)) = segments.iter_mut().flatten().find(|(si, _)| *si == i) {
+                sr.x = x;
+                sr.y = y;
+
+                y += nodes[i.index()].get_height() + spacing;
+            }
+        }
+
+        for mut segment in segments.into_iter() {
+            loop {
+                let overlap = segment
+                    .iter()
+                    .flat_map(|(si, sr)| {
+                        laid_out
+                            .iter()
+                            .enumerate()
+                            .filter(move |(i, _)| *i != si.index())
+                            .flat_map(|(_, rect)| rect)
+                            .filter_map(move |rect| rect.intersection(sr))
+                    })
+                    .max_by(|a, b| a.width.partial_cmp(&b.width).unwrap_or(Ordering::Less));
+
+                if let Some(overlap) = overlap {
+                    for (_si, sr) in segment.iter_mut() {
+                        sr.x += overlap.width + spacing;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            for (si, sr) in segment.into_iter() {
+                laid_out[si.index()] = Some(sr);
             }
         }
     }
 
-    idx_path.reverse();
+    let mut res = laid_out.into_iter().flatten().collect::<Vec<_>>();
+    assert!(res.len() == nodes.len(), "all nodes are laid out");
 
-    idx_path
+    if let Some(bounds) = Rect::bounded(&res) {
+        for rect in res.iter_mut() {
+            rect.y = bounds.height - rect.bottom();
+        }
+    }
+
+    Ok(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[derive(Clone, Copy)]
+    struct Size(u32, u32);
+
+    impl VisuallySized<u32> for Size {
+        fn get_width(&self) -> u32 {
+            self.0
+        }
+
+        fn get_height(&self) -> u32 {
+            self.1
+        }
+    }
+
+    impl Size {
+        fn positioned(self, x: u32, y: u32) -> Rect<u32> {
+            Rect {
+                x,
+                y,
+                width: self.0,
+                height: self.1,
+            }
+        }
+    }
+
+    const NODE: Size = Size(40, 30);
+    const SPACING: u32 = 10;
+
+    fn position(positions: Vec<(u32, u32)>) -> Vec<Rect<u32>> {
+        positions
+            .into_iter()
+            .map(|(x, y)| NODE.positioned(x * (NODE.0 + SPACING), y * (NODE.1 + SPACING)))
+            .collect()
+    }
+
+    // TODO: Test for properies of the result not the exact result, so it will be easier to
+    // understand what failed. For example test that nodes are behind eachother on the same level
+    // or column, etc.
+
+    #[test]
+    fn zero_nodes() {
+        let nodes: Vec<Size> = vec![];
+        let edges = vec![];
+        let result = match layout(&nodes, &edges, SPACING) {
+            Ok(result) => result,
+            Err(error) => {
+                println!("{}", error);
+                return;
+            }
+        };
+        assert_eq!(result, position(vec![]),);
+    }
+
+    #[test]
+    fn one_node() {
+        // 0
+        let nodes = vec![NODE; 1];
+        let edges = vec![];
+        let result = match layout(&nodes, &edges, SPACING) {
+            Ok(result) => result,
+            Err(error) => {
+                println!("{}", error);
+                return;
+            }
+        };
+        assert_eq!(result, position(vec![(0, 0)]),);
+    }
+
+    #[test]
+    fn two_nodes() {
+        // 1
+        // |
+        // 0
+        let nodes = vec![NODE; 2];
+        let edges = vec![(0, 1)];
+        let result = match layout(&nodes, &edges, SPACING) {
+            Ok(result) => result,
+            Err(error) => {
+                println!("{}", error);
+                return;
+            }
+        };
+        assert_eq!(result, position(vec![(0, 1), (0, 0)]),);
+    }
+
+    #[test]
+    fn three_nodes() {
+        // 1 2
+        // |/
+        // 0
+        let nodes = vec![NODE; 3];
+        let edges = vec![(0, 1), (0, 2)];
+        let result = match layout(&nodes, &edges, SPACING) {
+            Ok(result) => result,
+            Err(error) => {
+                println!("{}", error);
+                return;
+            }
+        };
+        assert_eq!(result, position(vec![(0, 1), (0, 0), (1, 0)]),);
+    }
+
+    #[test]
+    fn four_nodes() {
+        // 2
+        // |
+        // 1 3
+        // |/
+        // 0
+        let nodes = vec![NODE; 4];
+        let edges = vec![(0, 1), (1, 2), (0, 3)];
+        let result = match layout(&nodes, &edges, SPACING) {
+            Ok(result) => result,
+            Err(error) => {
+                println!("{}", error);
+                return;
+            }
+        };
+        assert_eq!(result, position(vec![(0, 2), (0, 1), (0, 0), (1, 1)]),);
+    }
 }

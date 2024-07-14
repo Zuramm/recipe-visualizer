@@ -1,0 +1,155 @@
+(
+    name: "Hackbällchen Toskana Auflauf",
+    steps: [
+        (
+            time_s: 300,
+            title: "Peel and chop finely",
+            note: None,
+            ingredients: [
+                "garlic",
+            ],
+            utensils: [],
+            requires: [],
+        ),
+        (
+            time_s: 60,
+            title: "Mix",
+            note: Some("until well combined"),
+            ingredients: [
+                "beef",
+                "salt",
+                "paprika pepper",
+                "egg",
+                "breadcrumbs",
+            ],
+            utensils: [
+                "bowl",
+            ],
+            requires: [
+                0,
+            ],
+        ),
+        (
+            time_s: 600,
+            title: "Shape",
+            note: Some("into 2cm wide meatballs"),
+            ingredients: [],
+            utensils: [],
+            requires: [
+                1,
+            ],
+        ),
+        (
+            time_s: 60,
+            title: "Add",
+            note: None,
+            ingredients: [],
+            utensils: [
+                "baking dish",
+            ],
+            requires: [
+                2,
+            ],
+        ),
+        (
+            time_s: 60,
+            title: "Mix",
+            note: None,
+            ingredients: [
+                "cream",
+                "tomato paste",
+                "chopped tomatoes",
+            ],
+            utensils: [],
+            requires: [],
+        ),
+        (
+            time_s: 60,
+            title: "Season",
+            note: Some("to taste"),
+            ingredients: [
+                "salt",
+                "paprika pepper",
+                "sugar",
+            ],
+            utensils: [],
+            requires: [
+                4,
+            ],
+        ),
+        (
+            time_s: 60,
+            title: "Pour over",
+            note: None,
+            ingredients: [],
+            utensils: [],
+            requires: [
+                3,
+                5,
+            ],
+        ),
+        (
+            time_s: 600,
+            title: "Preheat",
+            note: Some("to 180°C"),
+            ingredients: [],
+            utensils: [
+                "oven",
+            ],
+            requires: [],
+        ),
+        (
+            time_s: 300,
+            title: "Slice",
+            note: Some("thinly"),
+            ingredients: [
+                "mozzarella",
+            ],
+            utensils: [],
+            requires: [],
+        ),
+        (
+            time_s: 60,
+            title: "Add",
+            note: None,
+            ingredients: [],
+            utensils: [],
+            requires: [
+                6,
+                8,
+            ],
+        ),
+        (
+            time_s: 2100,
+            title: "Bake",
+            note: None,
+            ingredients: [],
+            utensils: [],
+            requires: [
+                7,
+                9,
+            ],
+        ),
+        (
+            time_s: 600,
+            title: "Cook",
+            note: None,
+            ingredients: [
+                "rice",
+            ],
+            utensils: [],
+            requires: [],
+        ),
+        (
+            time_s: 60,
+            title: "Add",
+            note: None,
+            ingredients: [],
+            utensils: [],
+            requires: [
+                10,
+                11,
+            ],
+        ),
+    ],
+)
