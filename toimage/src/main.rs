@@ -128,7 +128,6 @@ impl SizedStep {
         text_title.set_attributes(Some(&attrs));
         text_title.set_text(&step.title);
         let (_, lh) = text_title.size();
-        println!("font-size: 20, height: {}", lh / PANGO_SCALE);
         height_text += lh as f64 / PANGO_SCALE as f64;
 
         let text_note = step.note.map(|note| {
@@ -142,7 +141,6 @@ impl SizedStep {
             layout.set_attributes(Some(&attrs));
             layout.set_text(&note);
             let (_, lh) = layout.size();
-            println!("font-size: 12, height: {}", lh / PANGO_SCALE);
             height_text += lh as f64 / PANGO_SCALE as f64;
             layout
         });
@@ -159,7 +157,6 @@ impl SizedStep {
             layout.set_attributes(Some(&attrs));
             layout.set_text(&ingredients);
             let (_, lh) = layout.size();
-            println!("font-size: 12, height: {}", lh / PANGO_SCALE);
             height_text += lh as f64 / PANGO_SCALE as f64;
             Some(layout)
         } else {
@@ -178,7 +175,6 @@ impl SizedStep {
             layout.set_attributes(Some(&attrs));
             layout.set_text(&utensils);
             let (_, lh) = layout.size();
-            println!("font-size: 12, height: {}", lh / PANGO_SCALE);
             height_text += lh as f64 / PANGO_SCALE as f64;
             Some(layout)
         } else {
@@ -336,7 +332,6 @@ fn main() -> Result<(), MainError> {
         ctx.set_source(&colors.text)?;
         show_layout(&ctx, &step.text_title);
         y += step.text_title.size().1 as f64 / PANGO_SCALE as f64;
-        println!("{}", step.text_title.size().1);
 
         if let Some(text) = &step.text_note {
             ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
@@ -346,7 +341,6 @@ fn main() -> Result<(), MainError> {
             ctx.set_source(&colors.text)?;
             show_layout(&ctx, text);
             y += text.size().1 as f64 / PANGO_SCALE as f64;
-            println!("{}", text.size().1);
         }
 
         y += SPACING_TEXT;
@@ -359,7 +353,6 @@ fn main() -> Result<(), MainError> {
             ctx.set_source(&colors.text)?;
             show_layout(&ctx, text);
             y += text.size().1 as f64 / PANGO_SCALE as f64;
-            println!("{}", text.size().1);
         }
 
         if let Some(text) = &step.text_utensils {
@@ -370,7 +363,6 @@ fn main() -> Result<(), MainError> {
             ctx.set_source(&colors.text)?;
             show_layout(&ctx, text);
             // y += text.size().1 as f64 / PANGO_SCALE as f64;
-            println!("{}", text.size().1);
         }
     }
 
