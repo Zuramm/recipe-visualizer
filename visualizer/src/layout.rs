@@ -19,6 +19,12 @@ pub trait VisuallySized<Coordinates> {
     fn get_height(&self) -> Coordinates;
 }
 
+pub trait Timed {
+    fn get_duration(&self) -> f64 {
+        1.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rect<Coordinates> {
     pub x: Coordinates,
@@ -149,7 +155,7 @@ fn create_graph<'a, NodeWeight, Coordinates>(
     edges: &[(usize, usize)],
 ) -> DiGraph<&'a NodeWeight, f64>
 where
-    NodeWeight: VisuallySized<Coordinates>,
+    NodeWeight: VisuallySized<Coordinates> + Timed,
     f64: From<Coordinates>,
 {
     let mut graph = DiGraph::<&NodeWeight, f64>::new();
@@ -161,7 +167,7 @@ where
     }
 
     for &(from, to) in edges.iter() {
-        let weight = f64::from(nodes[from].get_height());
+        let weight = nodes[from].get_duration();
         let from = graph.from_index(from);
         let to = graph.from_index(to);
         graph.add_edge(from, to, weight);
@@ -225,7 +231,7 @@ pub fn layout<NodeWeight, Coordinates>(
     spacing: Coordinates,
 ) -> Result<Vec<Rect<Coordinates>>, LayoutError>
 where
-    NodeWeight: VisuallySized<Coordinates>,
+    NodeWeight: VisuallySized<Coordinates> + Timed,
     Coordinates: Add<Output = Coordinates>
         + AddAssign
         + Sub<Output = Coordinates>
@@ -397,6 +403,8 @@ mod tests {
             self.1
         }
     }
+
+    impl Timed for Size {}
 
     impl Size {
         fn positioned(self, x: u32, y: u32) -> Rect<u32> {

@@ -4,7 +4,7 @@ use pangocairo::functions::{create_layout, show_layout};
 use std::{f64, fs::File, io};
 use thiserror::Error;
 use visualizer::{
-    layout::{layout, LayoutError, Rect, VisuallySized},
+    layout::{layout, LayoutError, Rect, Timed, VisuallySized},
     Recipe, Step,
 };
 
@@ -205,6 +205,12 @@ impl VisuallySized<f64> for SizedStep {
     fn get_height(&self) -> f64 {
         self.height_text
         // self.height_time
+    }
+}
+
+impl Timed for SizedStep {
+    fn get_duration(&self) -> f64 {
+        self.height_time
     }
 }
 
