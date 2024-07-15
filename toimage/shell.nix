@@ -14,5 +14,10 @@ pkgs.mkShell {
     pkg-config
     rust-analyzer
     rustfmt
+    sccache
   ];
+
+  shellHook = ''
+    export RUSTC_WRAPPER=${pkgs.buildPackages.sccache}/bin/sccache
+  '';
 }
