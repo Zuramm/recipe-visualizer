@@ -9,6 +9,8 @@ pkgs.mkShell {
     cairo
     cargo
     clippy
+    inriafonts
+    pango
     pkg-config
     rust-analyzer
     rustfmt

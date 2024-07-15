@@ -7,6 +7,8 @@ edition = "2021"
 
 [dependencies]
 cairo-rs = { version = "0.20.0", features = ["png"] }
+pango = { version = "0.20.0", features = ["v1_52"] }
+pangocairo = "0.20.0"
 ron = "0.8.1"
 thiserror = "1.0.62"
 visualizer = { version = "0.1.0", path = "../visualizer" }

@@ -1,6 +1,7 @@
-use cairo::{Context, FontSlant, FontWeight, ImageSurface, Pattern};
-use core::ops::Range;
-use std::{fs::File, io};
+use cairo::{Context, ImageSurface, Pattern};
+use pango::{ffi::PANGO_SCALE, AttrInt, AttrList, FontDescription};
+use pangocairo::functions::{create_layout, show_layout};
+use std::{f64, fs::File, io};
 use thiserror::Error;
 use visualizer::{
     layout::{layout, LayoutError, Rect, VisuallySized},
@@ -14,9 +15,19 @@ const COLOR_BLUE: u32 = 0xff2499ee;
 
 const NODE_WIDTH: f64 = 150.0;
 const SPACING: f64 = 20.0;
-const MARGIN_PAGE: f64 = 10.0;
+const MARGIN_PAGE: f64 = 40.0;
 const MARGIN_BOX: f64 = 10.0;
 const SPACING_TEXT: f64 = 5.0;
+
+const FONT_SIZE_TITLE: f64 = 20.0;
+const FONT_SIZE_NOTE: f64 = 12.0;
+const FONT_SIZE_INGREDIENTS: f64 = 12.0;
+const FONT_SIZE_UTENSILS: f64 = 12.0;
+
+const LINE_HEIGHT_TITLE: f64 = 24.0;
+const LINE_HEIGHT_NOTE: f64 = 14.0;
+const LINE_HEIGHT_INGREDIENTS: f64 = 14.0;
+const LINE_HEIGHT_UTENSILS: f64 = 14.0;
 
 fn hex(ctx: &cairo::Context, argb: u32) -> Pattern {
     let a = 0xff & argb >> 24;
@@ -52,146 +63,124 @@ impl Colors {
     }
 }
 
-fn font_set_title(ctx: &cairo::Context) {
-    ctx.select_font_face("sans-serif", FontSlant::Normal, FontWeight::Bold);
-    ctx.set_font_size(20.0);
+struct Fonts {
+    title: FontDescription,
+    note: FontDescription,
+    ingredients: FontDescription,
+    utensils: FontDescription,
 }
 
-fn font_set_note(ctx: &cairo::Context) {
-    ctx.select_font_face("sans-serif", FontSlant::Italic, FontWeight::Normal);
-    ctx.set_font_size(12.0);
-}
+impl Fonts {
+    fn new() -> Self {
+        // NOTE: Font size is the distance between the baseline and the ascender line. In other
+        // words the height of capital letters like I.
+        let mut title = FontDescription::new();
+        title.set_family("Inria Serif");
+        title.set_absolute_size(FONT_SIZE_TITLE * PANGO_SCALE as f64);
+        title.set_weight(pango::Weight::Bold);
 
-fn font_set_ingredients(ctx: &cairo::Context) {
-    ctx.select_font_face("sans-serif", FontSlant::Normal, FontWeight::Normal);
-    ctx.set_font_size(12.0);
-}
+        let mut note = FontDescription::new();
+        note.set_family("Inria Serif");
+        note.set_absolute_size(FONT_SIZE_NOTE * PANGO_SCALE as f64);
+        note.set_style(pango::Style::Italic);
 
-fn font_set_utensils(ctx: &cairo::Context) {
-    ctx.select_font_face("sans-serif", FontSlant::Normal, FontWeight::Normal);
-    ctx.set_font_size(12.0);
-}
+        let mut ingredients = FontDescription::new();
+        ingredients.set_family("Inria Serif");
+        ingredients.set_absolute_size(FONT_SIZE_INGREDIENTS * PANGO_SCALE as f64);
 
-fn break_text_mono(max_width: usize, text: &str) -> Vec<Range<usize>> {
-    let mut res: Vec<Range<usize>> = Default::default();
-    let mut line: Range<usize> = 0..0;
-    let mut word_start: Option<usize> = None;
-    let mut x = 0;
-    for (i, c) in text.chars().enumerate() {
-        if c == '\n' || x == max_width {
-            res.push(line);
-            if let Some(ws) = word_start {
-                x = i - ws;
-                line = ws..ws;
-            } else {
-                x = 0;
-                line = i..i;
-            }
-            if c == '\n' {
-                line.start = i + 1;
-                line.end = i + 1;
-                continue;
-            }
+        let mut utensils = FontDescription::new();
+        utensils.set_family("Inria Serif");
+        utensils.set_absolute_size(FONT_SIZE_UTENSILS * PANGO_SCALE as f64);
+
+        Self {
+            title,
+            note,
+            ingredients,
+            utensils,
         }
-        if c.is_whitespace() {
-            if word_start.is_some() {
-                line.end = i;
-                word_start = None;
-            }
-        } else if word_start.is_none() {
-            word_start = Some(i);
-        }
-        x += 1;
     }
-    if word_start.is_some() {
-        line.end = text.len();
-    }
-    if !line.is_empty() {
-        res.push(line);
-    }
-    res
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn break_text_mono_few_words() {
-        let text = "Mix items";
-        let result = break_text_mono(24, text);
-        println!(
-            "{:?}",
-            result
-                .iter()
-                .map(|range| &text[range.clone()])
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(result, vec![0..9]);
-    }
-
-    #[test]
-    fn break_text_mono_many_words() {
-        let text = "butter, milk, flour, sugar, eggs, chocolate chips, etc.";
-        let result = break_text_mono(24, text);
-        println!(
-            "{:?}",
-            result
-                .iter()
-                .map(|range| &text[range.clone()])
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(result, vec![0..20, 21..43, 44..55])
-    }
-}
-
-fn draw_text(
-    ctx: &cairo::Context,
-    (text, lines): &(String, Vec<Range<usize>>),
-) -> Result<(), cairo::Error> {
-    for line in lines.iter().cloned() {
-        ctx.show_text(&text[line])?;
-    }
-    Ok(())
 }
 
 struct SizedStep {
     width: f64,
     height_time: f64,
     height_text: f64,
-    text_title: (String, Vec<Range<usize>>),
-    text_note: Option<(String, Vec<Range<usize>>)>,
-    text_ingredients: Option<(String, Vec<Range<usize>>)>,
-    text_utensils: Option<(String, Vec<Range<usize>>)>,
+    text_title: pango::Layout,
+    text_note: Option<pango::Layout>,
+    text_ingredients: Option<pango::Layout>,
+    text_utensils: Option<pango::Layout>,
 }
 
 impl SizedStep {
-    fn new(step: Step, width: f64) -> Result<Self, ()> {
+    fn new(step: Step, width: f64, ctx: &cairo::Context, fonts: &Fonts) -> Result<Self, ()> {
         let height_time = step.time_s as f64;
-        let mut height_text = 0.0;
+        let mut height_text = MARGIN_BOX * 2.0;
 
-        let tw = width as usize / 5;
-        let lines = break_text_mono(tw, &step.title);
-        height_text += 20.0 * lines.len() as f64;
-        let text_title = (step.title, lines);
+        let tw = ((width - MARGIN_BOX * 2.0) * PANGO_SCALE as f64) as i32;
+
+        let attrs = AttrList::new();
+        attrs.insert(AttrInt::new_line_height_absolute(
+            (LINE_HEIGHT_TITLE * PANGO_SCALE as f64) as i32,
+        ));
+        let text_title = create_layout(ctx);
+        text_title.set_width(tw);
+        text_title.set_font_description(Some(&fonts.title));
+        text_title.set_attributes(Some(&attrs));
+        text_title.set_text(&step.title);
+        let (_, lh) = text_title.size();
+        println!("font-size: 20, height: {}", lh / PANGO_SCALE);
+        height_text += lh as f64 / PANGO_SCALE as f64;
+
         let text_note = step.note.map(|note| {
-            let lines = break_text_mono(tw, &note);
-            height_text += 12.0 * lines.len() as f64;
-            (note, lines)
+            let attrs = AttrList::new();
+            attrs.insert(AttrInt::new_line_height_absolute(
+                (LINE_HEIGHT_NOTE * PANGO_SCALE as f64) as i32,
+            ));
+            let layout = create_layout(ctx);
+            layout.set_width(tw);
+            layout.set_font_description(Some(&fonts.note));
+            layout.set_attributes(Some(&attrs));
+            layout.set_text(&note);
+            let (_, lh) = layout.size();
+            println!("font-size: 12, height: {}", lh / PANGO_SCALE);
+            height_text += lh as f64 / PANGO_SCALE as f64;
+            layout
         });
+
         let ingredients = step.ingredients.join(", ");
-        let text_ingredients = if !ingredients.is_empty() {
-            let lines = break_text_mono(tw, &ingredients);
-            height_text += 12.0 * lines.len() as f64;
-            Some((ingredients, lines))
+        let text_ingredients = if !step.ingredients.is_empty() {
+            let attrs = AttrList::new();
+            attrs.insert(AttrInt::new_line_height_absolute(
+                (LINE_HEIGHT_INGREDIENTS * PANGO_SCALE as f64) as i32,
+            ));
+            let layout = create_layout(ctx);
+            layout.set_width(tw);
+            layout.set_font_description(Some(&fonts.ingredients));
+            layout.set_attributes(Some(&attrs));
+            layout.set_text(&ingredients);
+            let (_, lh) = layout.size();
+            println!("font-size: 12, height: {}", lh / PANGO_SCALE);
+            height_text += lh as f64 / PANGO_SCALE as f64;
+            Some(layout)
         } else {
             None
         };
-        let utensils = step.utensils.join(", ");
-        let text_utensils = if !utensils.is_empty() {
-            let lines = break_text_mono(tw, &utensils);
-            height_text += 12.0 * lines.len() as f64;
-            Some((utensils, lines))
+
+        let utensils = format!("using {}", step.utensils.join(", "));
+        let text_utensils = if !step.utensils.is_empty() {
+            let attrs = AttrList::new();
+            attrs.insert(AttrInt::new_line_height_absolute(
+                (LINE_HEIGHT_UTENSILS * PANGO_SCALE as f64) as i32,
+            ));
+            let layout = create_layout(ctx);
+            layout.set_width(tw);
+            layout.set_font_description(Some(&fonts.utensils));
+            layout.set_attributes(Some(&attrs));
+            layout.set_text(&utensils);
+            let (_, lh) = layout.size();
+            println!("font-size: 12, height: {}", lh / PANGO_SCALE);
+            height_text += lh as f64 / PANGO_SCALE as f64;
+            Some(layout)
         } else {
             None
         };
@@ -218,8 +207,8 @@ impl VisuallySized<f64> for SizedStep {
     }
 
     fn get_height(&self) -> f64 {
-        // self.height_text
-        self.height_time
+        self.height_text
+        // self.height_time
     }
 }
 
@@ -245,18 +234,8 @@ impl From<cairo::IoError> for MainError {
 }
 
 fn main() -> Result<(), MainError> {
-    let file = File::open("recipe_toscana.ron")?;
+    // 0
     // let file = File::open("recipe_single.ron")?;
-
-    let recipe: Recipe = ron::de::from_reader(&file)?;
-
-    let edges = recipe.edges();
-    let nodes = recipe
-        .steps
-        .into_iter()
-        .map(|step| SizedStep::new(step, NODE_WIDTH))
-        .collect::<Result<Vec<_>, ()>>()
-        .unwrap();
 
     // 00
     //  |
@@ -273,10 +252,22 @@ fn main() -> Result<(), MainError> {
     // 10 11
     //  |/
     // 12
+    let file = File::open("recipe_toscana.ron")?;
+
+    let recipe: Recipe = ron::de::from_reader(&file)?;
 
     let paint_surface = ImageSurface::create(cairo::Format::Rgb24, 1, 1)?;
     let paint_ctx = Context::new(&paint_surface)?;
     let colors = Colors::new(&paint_ctx);
+    let fonts = Fonts::new();
+
+    let edges = recipe.edges();
+    let nodes = recipe
+        .steps
+        .into_iter()
+        .map(|step| SizedStep::new(step, NODE_WIDTH, &paint_ctx, &fonts))
+        .collect::<Result<Vec<_>, ()>>()
+        .unwrap();
 
     let rects = layout(&nodes, &edges, SPACING)?;
     let bounds = Rect::bounded(&rects).expect("`rects` should contain more than one element");
@@ -290,33 +281,44 @@ fn main() -> Result<(), MainError> {
     ctx.translate(MARGIN_PAGE, MARGIN_PAGE);
 
     // draw background
-    ctx.set_source(colors.background)?;
+    ctx.set_source(&colors.background)?;
     ctx.paint()?;
 
     // draw boxes ///////////
-    ctx.set_source(colors.box_)?;
+    ctx.set_source(&colors.box_)?;
     for (step, rect) in nodes.iter() {
         ctx.rectangle(rect.x, rect.y, rect.width, step.height_text);
         ctx.fill()?;
     }
 
     // draw lines ///////////
-    ctx.set_source(colors.line)?;
+    let connection_offset_y = MARGIN_BOX + FONT_SIZE_TITLE / 2.0;
+    ctx.set_source(&colors.line)?;
     for (_step, rect) in nodes.iter() {
         ctx.move_to(rect.right(), rect.top());
         ctx.line_to(rect.right(), rect.bottom());
         ctx.stroke()?;
+        let radius = 3.0;
+        ctx.move_to(rect.right(), rect.top());
+        ctx.arc(
+            rect.right(),
+            rect.top() + connection_offset_y,
+            radius,
+            0.0,
+            f64::consts::PI * 2.0,
+        );
+        ctx.fill()?;
     }
 
     for (from, to) in edges.iter().copied() {
         let from_rect = &nodes[from].1;
         let to_rect = &nodes[to].1;
-        ctx.move_to(from_rect.right(), from_rect.bottom());
+        ctx.move_to(from_rect.right(), from_rect.top() + connection_offset_y);
         ctx.curve_to(
             from_rect.right(),
-            from_rect.bottom() - 100.0,
+            from_rect.top() + connection_offset_y - 50.0,
             to_rect.right(),
-            to_rect.bottom() + 50.0,
+            to_rect.bottom() + 100.0,
             to_rect.right(),
             to_rect.bottom(),
         );
@@ -324,41 +326,53 @@ fn main() -> Result<(), MainError> {
     }
 
     // draw text ////////////
-    ctx.set_source(colors.text)?;
     for (step, rect) in nodes.iter() {
-        let mut y = rect.y;
+        let mut y = rect.y + MARGIN_BOX;
 
-        font_set_title(&ctx);
-        y += 20.0;
-        ctx.move_to(rect.x, y);
-        draw_text(&ctx, &step.text_title)?;
+        ctx.move_to(rect.x + 1.5 + MARGIN_BOX, y + 1.5);
+        ctx.set_source(&colors.background)?;
+        show_layout(&ctx, &step.text_title);
+        ctx.move_to(rect.x + MARGIN_BOX, y);
+        ctx.set_source(&colors.text)?;
+        show_layout(&ctx, &step.text_title);
+        y += step.text_title.size().1 as f64 / PANGO_SCALE as f64;
+        println!("{}", step.text_title.size().1);
 
         if let Some(text) = &step.text_note {
-            font_set_note(&ctx);
-            y += 12.0;
-            ctx.move_to(rect.x, y);
-            draw_text(&ctx, text)?;
+            ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
+            ctx.set_source(&colors.background)?;
+            show_layout(&ctx, text);
+            ctx.move_to(rect.x + MARGIN_BOX, y);
+            ctx.set_source(&colors.text)?;
+            show_layout(&ctx, text);
+            y += text.size().1 as f64 / PANGO_SCALE as f64;
+            println!("{}", text.size().1);
         }
 
         y += SPACING_TEXT;
 
         if let Some(text) = &step.text_ingredients {
-            font_set_ingredients(&ctx);
-            y += 12.0;
-            ctx.move_to(rect.x, y);
-            draw_text(&ctx, text)?;
+            ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
+            ctx.set_source(&colors.background)?;
+            show_layout(&ctx, text);
+            ctx.move_to(rect.x + MARGIN_BOX, y);
+            ctx.set_source(&colors.text)?;
+            show_layout(&ctx, text);
+            y += text.size().1 as f64 / PANGO_SCALE as f64;
+            println!("{}", text.size().1);
         }
 
         if let Some(text) = &step.text_utensils {
-            font_set_utensils(&ctx);
-            y += 12.0;
-            ctx.move_to(rect.x, y);
-            draw_text(&ctx, text)?;
+            ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
+            ctx.set_source(&colors.background)?;
+            show_layout(&ctx, text);
+            ctx.move_to(rect.x + MARGIN_BOX, y);
+            ctx.set_source(&colors.text)?;
+            show_layout(&ctx, text);
+            // y += text.size().1 as f64 / PANGO_SCALE as f64;
+            println!("{}", text.size().1);
         }
     }
-
-    let mut file = File::create("output.png")?;
-    surface.write_to_png(&mut file)?;
 
     Ok(())
 }

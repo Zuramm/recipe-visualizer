@@ -3,12 +3,15 @@
     steps: [
         (
             time_s: 300,
-            title: "Peel and chop finely",
-            note: None,
+            title: "Mix",
+            note: Some("gently"),
             ingredients: [
-                "garlic",
+                "avocado",
+                "lemon",
             ],
-            utensils: [],
+            utensils: [
+                "bowl"
+            ],
             requires: [],
         ),
     ],
