@@ -366,5 +366,8 @@ fn main() -> Result<(), MainError> {
         }
     }
 
+    let mut file = File::create("output.png")?;
+    surface.write_to_png(&mut file)?;
+
     Ok(())
 }
