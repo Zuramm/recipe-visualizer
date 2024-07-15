@@ -391,7 +391,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[derive(Clone, Copy)]
     struct Size(u32, u32);
@@ -430,88 +429,216 @@ mod tests {
     }
 
     // TODO: Test for properies of the result not the exact result, so it will be easier to
-    // understand what failed. For example test that nodes are behind eachother on the same level
-    // or column, etc.
+    //       understand what failed. For example test that nodes are behind eachother on the same level
+    //       or column, etc.
 
-    #[test]
-    fn zero_nodes() {
-        let nodes: Vec<Size> = vec![];
-        let edges = vec![];
-        let result = match layout(&nodes, &edges, SPACING) {
-            Ok(result) => result,
-            Err(error) => {
-                println!("{}", error);
-                return;
-            }
-        };
-        assert_eq!(result, position(vec![]),);
+    fn is_in_same_column(node_a: &Rect<u32>, node_b: &Rect<u32>) -> bool {
+        node_a.x == node_b.x
     }
 
-    #[test]
-    fn one_node() {
-        // 0
-        let nodes = vec![NODE; 1];
-        let edges = vec![];
-        let result = match layout(&nodes, &edges, SPACING) {
-            Ok(result) => result,
-            Err(error) => {
-                println!("{}", error);
-                return;
-            }
-        };
-        assert_eq!(result, position(vec![(0, 0)]),);
+    fn is_in_same_row(node_a: &Rect<u32>, node_b: &Rect<u32>) -> bool {
+        node_a.y == node_b.y
     }
 
-    #[test]
-    fn two_nodes() {
-        // 1
-        // |
-        // 0
-        let nodes = vec![NODE; 2];
-        let edges = vec![(0, 1)];
-        let result = match layout(&nodes, &edges, SPACING) {
-            Ok(result) => result,
-            Err(error) => {
-                println!("{}", error);
-                return;
-            }
-        };
-        assert_eq!(result, position(vec![(0, 1), (0, 0)]),);
+    fn is_above(node_a: &Rect<u32>, node_b: &Rect<u32>) -> bool {
+        is_in_same_column(node_a, node_b) && node_a.bottom() + SPACING == node_b.top()
     }
 
-    #[test]
-    fn three_nodes() {
-        // 1 2
-        // |/
-        // 0
-        let nodes = vec![NODE; 3];
-        let edges = vec![(0, 1), (0, 2)];
-        let result = match layout(&nodes, &edges, SPACING) {
-            Ok(result) => result,
-            Err(error) => {
-                println!("{}", error);
-                return;
-            }
-        };
-        assert_eq!(result, position(vec![(0, 1), (0, 0), (1, 0)]),);
+    fn is_left_of(node_a: &Rect<u32>, node_b: &Rect<u32>) -> bool {
+        node_a.right() + SPACING == node_b.left() && is_in_same_row(node_a, node_b)
     }
 
-    #[test]
-    fn four_nodes() {
-        // 2
-        // |
-        // 1 3
-        // |/
-        // 0
-        let nodes = vec![NODE; 4];
-        let edges = vec![(0, 1), (1, 2), (0, 3)];
-        let result = match layout(&nodes, &edges, SPACING) {
-            Ok(result) => result,
-            Err(error) => {
-                println!("{}", error);
-                return;
-            }
-        };
-        assert_eq!(result, position(vec![(0, 2), (0, 1), (0, 0), (1, 1)]),);
+    mod zero_nodes {
+        use super::*;
+
+        fn run() -> Result<Vec<Rect<u32>>, LayoutError> {
+            // 0
+            let nodes: Vec<Size> = vec![];
+            let edges = vec![];
+
+            layout(&nodes, &edges, SPACING)
+        }
+
+        #[test]
+        fn same_amount_of_nodes() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert_eq!(result.len(), 0);
+            Ok(())
+        }
+    }
+
+    mod one_node {
+        use super::*;
+
+        fn run() -> Result<Vec<Rect<u32>>, LayoutError> {
+            // 0
+            let nodes = vec![NODE];
+            let edges = vec![];
+
+            let res = layout(&nodes, &edges, SPACING);
+            println!("{res:?}");
+            res
+        }
+
+        #[test]
+        fn same_amount_of_nodes() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert_eq!(result.len(), 1);
+            Ok(())
+        }
+
+        #[test]
+        fn bounding_box_is_equal_to_node() -> Result<(), LayoutError> {
+            let result = run()?;
+            let bounding_box = Rect::bounded(&result).unwrap();
+            assert_eq!(bounding_box, NODE.positioned(0, 0));
+            Ok(())
+        }
+    }
+
+    mod two_nodes {
+        use super::*;
+
+        fn run() -> Result<Vec<Rect<u32>>, LayoutError> {
+            // 1
+            // |
+            // 0
+            let nodes = vec![NODE; 2];
+            let edges = vec![(0, 1)];
+            let res = layout(&nodes, &edges, SPACING);
+            println!("{res:?}");
+            res
+        }
+
+        #[test]
+        fn same_amount_of_nodes() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert_eq!(result.len(), 2);
+            Ok(())
+        }
+
+        #[test]
+        fn bounding_box_is_correct() -> Result<(), LayoutError> {
+            let result = run()?;
+            let bounding_box = Rect::bounded(&result).unwrap();
+            assert_eq!(
+                bounding_box,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: NODE.0,
+                    height: NODE.1 * 2 + SPACING
+                }
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn layout_is_as_expected() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert!(is_above(&result[1], &result[0]), "node 1 is above node 0");
+            Ok(())
+        }
+    }
+
+    mod simple_branch {
+        use super::*;
+
+        fn run() -> Result<Vec<Rect<u32>>, LayoutError> {
+            // 1 2
+            // |/
+            // 0
+            let nodes = vec![NODE; 3];
+            let edges = vec![(0, 1), (0, 2)];
+            let res = layout(&nodes, &edges, SPACING);
+            println!("{res:?}");
+            res
+        }
+
+        #[test]
+        fn same_amount_of_nodes() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert_eq!(result.len(), 3);
+            Ok(())
+        }
+
+        #[test]
+        fn bounding_box_is_correct() -> Result<(), LayoutError> {
+            let result = run()?;
+            let bounding_box = Rect::bounded(&result).unwrap();
+            assert_eq!(
+                bounding_box,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: NODE.0 * 2 + SPACING,
+                    height: NODE.1 * 2 + SPACING,
+                }
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn layout_is_as_expected() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert!(is_above(&result[1], &result[0]), "node 1 is above node 0");
+            assert!(
+                is_in_same_row(&result[1], &result[2]),
+                "node 1 and node 2 are in the same row"
+            );
+            Ok(())
+        }
+    }
+
+    mod simple_branch_with_one_arm_longer {
+        use super::*;
+
+        fn run() -> Result<Vec<Rect<u32>>, LayoutError> {
+            // 2
+            // |
+            // 1 3
+            // |/
+            // 0
+            let nodes = vec![NODE; 4];
+            let edges = vec![(0, 1), (1, 2), (0, 3)];
+            let res = layout(&nodes, &edges, SPACING);
+            println!("{res:?}");
+            res
+        }
+
+        #[test]
+        fn same_amount_of_nodes() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert_eq!(result.len(), 4);
+            Ok(())
+        }
+
+        #[test]
+        fn bounding_box_is_correct() -> Result<(), LayoutError> {
+            let result = run()?;
+            let bounding_box = Rect::bounded(&result).unwrap();
+            assert_eq!(
+                bounding_box,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: NODE.0 * 2 + SPACING,
+                    height: NODE.1 * 3 + SPACING * 2,
+                }
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn layout_is_as_expected() -> Result<(), LayoutError> {
+            let result = run()?;
+            assert!(is_above(&result[1], &result[0]), "node 1 is above node 0");
+            assert!(is_above(&result[2], &result[1]), "node 1 is above node 0");
+            assert!(
+                is_in_same_row(&result[1], &result[3]),
+                "node 1 and node 2 are in the same row"
+            );
+            Ok(())
+        }
     }
 }
