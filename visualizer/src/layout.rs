@@ -215,6 +215,68 @@ fn get_and_remove_longest_path(
         })
 }
 
+pub fn path_get_not_laid_out_segments<
+    NodeWeight: VisuallySized<Coordinates>,
+    Coordinates: Default,
+>(
+    graph: &DiGraph<&NodeWeight, f64>,
+    laid_out: &[Option<Rect<Coordinates>>],
+    path: &[NodeIndex<u32>],
+) -> Vec<Vec<(NodeIndex<u32>, Rect<Coordinates>)>> {
+    let mut segments = path.iter().fold(vec![vec![]], |mut arr, &i| {
+        if laid_out[i.index()].is_some() {
+            if !arr
+                .last()
+                .expect("`arr` should be initialized with one element")
+                .is_empty()
+            {
+                arr.push(vec![]);
+            }
+        } else {
+            arr.last_mut()
+                .expect("`arr` should be initialized with one element")
+                .push((
+                    i,
+                    Rect {
+                        x: Coordinates::default(),
+                        y: Coordinates::default(),
+                        width: graph[i].get_width(),
+                        height: graph[i].get_height(),
+                    },
+                ));
+        }
+        arr
+    });
+    if segments
+        .last()
+        .expect("`segments` should be initialized with at least one element")
+        .is_empty()
+    {
+        segments
+            .last_mut()
+            .expect("`segments` should be initialized with at least one element")
+            .pop();
+    }
+
+    segments
+}
+
+fn push_node_children<NodeWeight, Coordinates: Copy + Add<Output = Coordinates> + AddAssign>(
+    graph: &DiGraph<&NodeWeight, f64>,
+    laid_out: &mut [Option<Rect<Coordinates>>],
+    i: NodeIndex,
+    amount: Coordinates,
+) {
+    depth_first_search(&graph, Some(i), |event| {
+        if let DfsEvent::Discover(node, _) = event {
+            if let Some(rect) = laid_out[node.index()].as_mut() {
+                rect.y += amount;
+            }
+        }
+        Control::<()>::Continue
+    });
+}
+
 #[derive(Error, Debug)]
 pub enum LayoutError {
     #[error("graph contains a cycle")]
@@ -280,41 +342,9 @@ where
 
     while let Some(path) = get_and_remove_longest_path(&mut paths_from_root) {
         // get all subsequences of the path, in which no node is laid out
-        let mut segments = path.iter().fold(vec![vec![]], |mut arr, &i| {
-            if laid_out[i.index()].is_some() {
-                if !arr
-                    .last()
-                    .expect("`arr` should be initialized with one element")
-                    .is_empty()
-                {
-                    arr.push(vec![]);
-                }
-            } else {
-                arr.last_mut()
-                    .expect("`arr` should be initialized with one element")
-                    .push((
-                        i,
-                        Rect {
-                            x: Coordinates::default(),
-                            y: Coordinates::default(),
-                            width: graph[i].get_width(),
-                            height: graph[i].get_height(),
-                        },
-                    ));
-            }
-            arr
-        });
-        if segments
-            .last()
-            .expect("`segments` should be initialized with at least one element")
-            .is_empty()
-        {
-            segments
-                .last_mut()
-                .expect("`segments` should be initialized with at least one element")
-                .pop();
-        }
+        let mut segments = path_get_not_laid_out_segments(&graph, &laid_out, &path);
 
+        // start with naive layout
         let mut x = Coordinates::default();
         let mut y = Coordinates::default();
         for i in path.iter().copied() {
@@ -323,14 +353,7 @@ where
             if let Some(rect) = laid_out[i.index()].clone() {
                 if y > rect.top() {
                     let diff = y - rect.top();
-                    depth_first_search(&graph, Some(i), |event| {
-                        if let DfsEvent::Discover(node, _) = event {
-                            if let Some(rect) = laid_out[node.index()].as_mut() {
-                                rect.y += diff;
-                            }
-                        }
-                        Control::<()>::Continue
-                    });
+                    push_node_children(&graph, &mut laid_out, i, diff);
                 }
 
                 x = rect.left();
@@ -347,7 +370,8 @@ where
             }
         }
 
-        for mut segment in segments.into_iter() {
+        // resolve collisions
+        for segment in segments.into_iter() {
             loop {
                 let overlap = segment
                     .iter()
@@ -358,13 +382,19 @@ where
                             .filter(move |(i, _)| *i != si.index())
                             .flat_map(|(_, rect)| rect)
                             .filter_map(move |rect| rect.intersection(sr))
+                            .map(|rect| (si.clone(), rect))
                     })
-                    .max_by(|a, b| a.width.partial_cmp(&b.width).unwrap_or(Ordering::Less));
+                    .max_by(|a, b| {
+                        a.1.height
+                            .partial_cmp(&b.1.height)
+                            .unwrap_or(Ordering::Less)
+                    });
 
-                if let Some(overlap) = overlap {
-                    for (_si, sr) in segment.iter_mut() {
-                        sr.x += overlap.width + spacing;
-                    }
+                if let Some((si, overlap)) = overlap {
+                    push_node_children(&graph, &mut laid_out, si, overlap.height);
+                    // for (_si, sr) in segment.iter_mut() {
+                    //     sr.x += overlap.width + spacing;
+                    // }
                 } else {
                     break;
                 }
