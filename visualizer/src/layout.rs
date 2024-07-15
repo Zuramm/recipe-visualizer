@@ -242,10 +242,12 @@ where
         + Debug,
     f64: From<Coordinates>,
 {
+    if nodes.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let graph = create_graph(nodes, edges);
 
-    // TODO: turn these into asserts
-    // assume graph is acyclic
     if is_cyclic_directed(&graph) {
         return Err(LayoutError::GraphIsCyclic);
     }
@@ -259,7 +261,7 @@ where
                 .is_none()
         })
         .collect::<Vec<_>>();
-    if root.len() != 1 {
+    if root.len() > 1 {
         return Err(LayoutError::GraphHasMultipleRoots {
             roots: root.into_iter().map(NodeIndex::index).collect(),
         });
