@@ -323,7 +323,7 @@ fn main() -> Result<(), MainError> {
 
     // draw text ////////////
     for (step, rect) in nodes.iter() {
-        let mut y = rect.y + MARGIN_BOX;
+        let mut y = rect.y + MARGIN_BOX + 1.0;
 
         ctx.move_to(rect.x + 1.5 + MARGIN_BOX, y + 1.5);
         ctx.set_source(&colors.background)?;
