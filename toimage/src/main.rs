@@ -271,7 +271,7 @@ fn main() -> Result<(), MainError> {
         .collect::<Result<Vec<_>, ()>>()
         .unwrap();
 
-    let rects = layout(&nodes, &edges, SPACING)?;
+    let rects = layout(&nodes, &edges, SPACING, SPACING)?;
     let bounds = Rect::bounded(&rects).expect("`rects` should contain more than one element");
     let nodes = nodes.into_iter().zip(rects).collect::<Vec<_>>();
     let surface = ImageSurface::create(

@@ -5,6 +5,13 @@ pkgs.mkShell {
   name = "recipe-visualizer";
 
   nativeBuildInputs = with pkgs.buildPackages; [
+    # python
+    black
+    isort
+    pyright
+    python3
+
+    #rust
     bacon
     cargo
     clippy
