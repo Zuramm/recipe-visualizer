@@ -293,17 +293,41 @@ fn main() -> Result<(), MainError> {
         ctx.fill()?;
     }
 
+    for (from, to) in edges.iter().copied() {
+        let from_rect = &nodes[from].1;
+        let to_rect = &nodes[to].1;
+        ctx.move_to(from_rect.left(), from_rect.top());
+        ctx.curve_to(
+            from_rect.left(),
+            from_rect.top() - SPACING / 1.0,
+            to_rect.left(),
+            to_rect.bottom(),
+            to_rect.left(),
+            to_rect.bottom() - SPACING / 1.0,
+        );
+        ctx.line_to(to_rect.right(), to_rect.bottom());
+        ctx.curve_to(
+            to_rect.right(),
+            to_rect.bottom() + SPACING / 1.0,
+            from_rect.right(),
+            from_rect.top() - SPACING / 1.0,
+            from_rect.right(),
+            from_rect.top(),
+        );
+        ctx.fill()?;
+    }
+
     // draw lines ///////////
     let connection_offset_y = MARGIN_BOX + FONT_SIZE_TITLE / 2.0;
     ctx.set_source(&colors.line)?;
     for (_step, rect) in nodes.iter() {
-        ctx.move_to(rect.right(), rect.top());
-        ctx.line_to(rect.right(), rect.bottom());
+        ctx.move_to(rect.left(), rect.top() + connection_offset_y);
+        ctx.line_to(rect.left(), rect.bottom() - SPACING);
         ctx.stroke()?;
         let radius = 3.0;
-        ctx.move_to(rect.right(), rect.top());
+        ctx.move_to(rect.left(), rect.top());
         ctx.arc(
-            rect.right(),
+            rect.left(),
             rect.top() + connection_offset_y,
             radius,
             0.0,
@@ -315,14 +339,14 @@ fn main() -> Result<(), MainError> {
     for (from, to) in edges.iter().copied() {
         let from_rect = &nodes[from].1;
         let to_rect = &nodes[to].1;
-        ctx.move_to(from_rect.right(), from_rect.top() + connection_offset_y);
+        ctx.move_to(from_rect.left(), from_rect.top() + connection_offset_y);
         ctx.curve_to(
-            from_rect.right(),
+            from_rect.left(),
             from_rect.top() + connection_offset_y - 50.0,
-            to_rect.right(),
-            to_rect.bottom() + 100.0,
-            to_rect.right(),
-            to_rect.bottom(),
+            to_rect.left(),
+            to_rect.bottom() - SPACING + 50.0,
+            to_rect.left(),
+            to_rect.bottom() - SPACING,
         );
         ctx.stroke()?;
     }
