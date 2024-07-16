@@ -63,6 +63,15 @@ impl<Coordinates: Copy + Add<Output = Coordinates>> Rect<Coordinates> {
     pub fn right(&self) -> Coordinates {
         self.x + self.width
     }
+
+    pub fn extend_right_bottom(&self, right: Coordinates, bottom: Coordinates) -> Self {
+        Self {
+            x: self.x,
+            y: self.y,
+            width: self.width + right,
+            height: self.height + bottom,
+        }
+    }
 }
 
 impl<Coordinates: Copy + Sub<Output = Coordinates>> Rect<Coordinates> {
@@ -125,7 +134,7 @@ impl<
         let top = max(self.top(), other.top())?;
         let right = min(self.right(), other.right())?;
         let bottom = min(self.bottom(), other.bottom())?;
-        if left <= right && top <= bottom {
+        if left < right && top < bottom {
             Some(Self::from_sides(left, top, right, bottom))
         } else {
             None
@@ -333,7 +342,6 @@ where
 
     let paths_from_root = {
         let mut paths = bellman_ford(&graph, root).expect("graph should not be cyclic");
-        println!("{paths:?}");
         let mut to_visit = paths
             .distances
             .iter()
@@ -341,21 +349,17 @@ where
             .enumerate()
             .collect::<Vec<_>>();
         to_visit.sort_by(|a, b| f64::total_cmp(&b.1, &a.1));
-        println!("tovisit: {to_visit:?}");
 
         for (i, dist) in to_visit {
             let mut i = i;
             while let Some(j) = paths.predecessors[i] {
                 i = j.index();
                 paths.distances[i] = paths.distances[i].max(dist);
-                println!("update {} to {}", j.index(), paths.distances[j.index()]);
             }
         }
 
         paths
     };
-
-    println!("{paths_from_root:?}");
 
     let mut laid_out: Vec<Option<Rect<Coordinates>>> = vec![None; nodes.len()];
     laid_out[root.index()] = Some(Rect {
@@ -396,13 +400,13 @@ where
             while let Some(overlap) = laid_out
                 .iter()
                 .flatten()
-                .flat_map(|r| srect.intersection(r))
+                .flat_map(|r| {
+                    srect.intersection(&r.extend_right_bottom(Coordinates::default(), spacing_y))
+                })
                 .max_by(|a, b| a.height.partial_cmp(&b.height).unwrap())
             {
-                println!("{overlap:?}");
-                srect.y += overlap.height + spacing_y;
-                push_node_children(&graph, &mut laid_out, next, overlap.height + spacing_y);
-                break;
+                srect.y += overlap.height;
+                push_node_children(&graph, &mut laid_out, next, overlap.height);
             }
             x += srect.width + spacing_x;
             laid_out[i.index()] = Some(srect);
