@@ -1,4 +1,5 @@
 use cairo::{Context, ImageSurface, Pattern};
+use hyphenation::{Hyphenator, Load};
 use pango::{ffi::PANGO_SCALE, AttrInt, AttrList, FontDescription};
 use pangocairo::functions::{create_layout, show_layout};
 use std::{f64, fs::File, io};
@@ -101,6 +102,24 @@ impl Fonts {
     }
 }
 
+fn place_hyphens(hyphen: &hyphenation::Standard, string: &str) -> String {
+    let mut hyphen_breaks = hyphen.hyphenate(string).breaks;
+    hyphen_breaks.insert(0, 0);
+
+    let mut hyphenated = String::new();
+
+    for window in hyphen_breaks.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        hyphenated.push_str(&string[start..end]);
+        hyphenated.push('\u{00ad}');
+    }
+
+    hyphenated.push_str(&string[*hyphen_breaks.last().unwrap()..]);
+
+    hyphenated
+}
+
 struct SizedStep {
     width: f64,
     height_time: f64,
@@ -112,12 +131,19 @@ struct SizedStep {
 }
 
 impl SizedStep {
-    fn new(step: Step, width: f64, ctx: &cairo::Context, fonts: &Fonts) -> Result<Self, ()> {
+    fn new(
+        step: Step,
+        width: f64,
+        ctx: &cairo::Context,
+        fonts: &Fonts,
+        hyphen: &hyphenation::Standard,
+    ) -> Result<Self, ()> {
         let height_time = step.time_s as f64;
         let mut height_text = MARGIN_BOX * 2.0;
 
         let tw = ((width - MARGIN_BOX * 2.0) * PANGO_SCALE as f64) as i32;
 
+        let title = place_hyphens(hyphen, &step.title);
         let attrs = AttrList::new();
         attrs.insert(AttrInt::new_line_height_absolute(
             (LINE_HEIGHT_TITLE * PANGO_SCALE as f64) as i32,
@@ -126,11 +152,12 @@ impl SizedStep {
         text_title.set_width(tw);
         text_title.set_font_description(Some(&fonts.title));
         text_title.set_attributes(Some(&attrs));
-        text_title.set_text(&step.title);
+        text_title.set_text(&title);
         let (_, lh) = text_title.size();
         height_text += lh as f64 / PANGO_SCALE as f64;
 
         let text_note = step.note.map(|note| {
+            let note = place_hyphens(hyphen, &note);
             let attrs = AttrList::new();
             attrs.insert(AttrInt::new_line_height_absolute(
                 (LINE_HEIGHT_NOTE * PANGO_SCALE as f64) as i32,
@@ -145,7 +172,7 @@ impl SizedStep {
             layout
         });
 
-        let ingredients = step.ingredients.join(", ");
+        let ingredients = place_hyphens(hyphen, &step.ingredients.join(", "));
         let text_ingredients = if !step.ingredients.is_empty() {
             let attrs = AttrList::new();
             attrs.insert(AttrInt::new_line_height_absolute(
@@ -163,7 +190,7 @@ impl SizedStep {
             None
         };
 
-        let utensils = format!("using {}", step.utensils.join(", "));
+        let utensils = place_hyphens(hyphen, &format!("using {}", step.utensils.join(", ")));
         let text_utensils = if !step.utensils.is_empty() {
             let attrs = AttrList::new();
             attrs.insert(AttrInt::new_line_height_absolute(
@@ -216,14 +243,16 @@ impl Timed for SizedStep {
 
 #[derive(Debug, Error)]
 enum MainError {
-    #[error(transparent)]
+    #[error("Layout error: {0}")]
     Layout(#[from] LayoutError),
-    #[error(transparent)]
+    #[error("Cairo error: {0}")]
     Cairo(#[from] cairo::Error),
-    #[error(transparent)]
+    #[error("Io error: {0}")]
     Io(#[from] io::Error),
-    #[error(transparent)]
+    #[error("Ron error: {0}")]
     RonDe(#[from] ron::error::SpannedError),
+    #[error("Hyphenation error: {0}")]
+    Hyphenation(#[from] hyphenation::load::Error),
 }
 
 impl From<cairo::IoError> for MainError {
@@ -258,6 +287,8 @@ fn main() -> Result<(), MainError> {
 
     let recipe: Recipe = ron::de::from_reader(&file)?;
 
+    let en_us = hyphenation::Standard::from_embedded(hyphenation::Language::EnglishUS)?;
+
     let paint_surface = ImageSurface::create(cairo::Format::Rgb24, 1, 1)?;
     let paint_ctx = Context::new(&paint_surface)?;
     let colors = Colors::new(&paint_ctx);
@@ -267,7 +298,7 @@ fn main() -> Result<(), MainError> {
     let nodes = recipe
         .steps
         .into_iter()
-        .map(|step| SizedStep::new(step, NODE_WIDTH, &paint_ctx, &fonts))
+        .map(|step| SizedStep::new(step, NODE_WIDTH, &paint_ctx, &fonts, &en_us))
         .collect::<Result<Vec<_>, ()>>()
         .unwrap();
 
