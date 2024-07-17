@@ -160,6 +160,8 @@ impl<
     }
 }
 
+/// Creates a graph from nodes and edges. The duration of the target node is used for the weight of
+/// each edge.
 fn create_graph<'a, NodeWeight, Coordinates>(
     nodes: &'a [NodeWeight],
     edges: &[(usize, usize)],
@@ -321,9 +323,12 @@ where
 
     let graph = create_graph(nodes, edges);
 
+    // Ensure that the graph has no cycles
     if is_cyclic_directed(&graph) {
         return Err(LayoutError::GraphIsCyclic);
     }
+
+    // Get the single root of the graph and return an error if there are multitle.
     let root = graph
         .node_indices()
         .filter(|&id| {
@@ -340,6 +345,9 @@ where
     }
     let root = root[0];
 
+    // Run the bellman-ford algorithm on the graph and update the distances such that each distance
+    // is furthest reachable from the current node. This allows for a greedy aproach when layouting
+    // the graph.
     let paths_from_root = {
         let mut paths = bellman_ford(&graph, root).expect("graph should not be cyclic");
         let mut to_visit = paths
@@ -361,6 +369,7 @@ where
         paths
     };
 
+    // Prepare the layout and initialze with the root at Coordinates (0, 0).
     let mut laid_out: Vec<Option<Rect<Coordinates>>> = vec![None; nodes.len()];
     laid_out[root.index()] = Some(Rect {
         x: Coordinates::default(),
@@ -369,9 +378,14 @@ where
         height: graph[root].get_height(),
     });
 
+    // In a breadth first search, to layout each node while checking for overlaps and pushing nodes to
+    // resolve the oevrlap.
     let mut just_laid_out = VecDeque::from([root]);
 
     while let Some(next) = just_laid_out.pop_front() {
+        // Get the successors for the current node and sort them using their assigned distance,
+        // which contains the furthest distance. In other words nodes along the longest path are on
+        // the left and nodes olong the shortest path are on the right.
         let mut successors = graph
             .edges_directed(next, petgraph::Direction::Outgoing)
             .map(|i| i.target())
@@ -379,6 +393,8 @@ where
             .collect::<Vec<_>>();
         // NOTE: Sort needs to be stable, so that if the distances are equal the first defined is
         // preferred.
+        // NOTE: It is sorted ascending and then reversed, because total_cmp returns b argument if
+        // a and b are equal.
         successors.sort_by(|a, b| {
             f64::total_cmp(
                 &paths_from_root.distances[a.index()],
@@ -386,17 +402,22 @@ where
             )
         });
         successors.reverse();
+
+        // Layout the beneath the current node and and next to each other.
         let mut rect = laid_out[next.index()]
             .as_ref()
             .expect("only laid out nodes are in the queue");
         let mut x = rect.x;
         for i in successors {
+            // Assign naive position.
             let mut srect = Rect {
                 x,
                 y: rect.bottom() + spacing_y,
                 width: graph[i].get_width(),
                 height: graph[i].get_height(),
             };
+            // Push all laid out children of the current node up the resolve the overlap. Repeat
+            // until the is no overlap.
             while let Some(overlap) = laid_out
                 .iter()
                 .flatten()
@@ -408,6 +429,7 @@ where
                 srect.y += overlap.height;
                 push_node_children(&graph, &mut laid_out, next, overlap.height);
             }
+            // Commit the layout and prepare variables for the next iteration.
             x += srect.width + spacing_x;
             laid_out[i.index()] = Some(srect);
             just_laid_out.push_back(i);
@@ -417,9 +439,11 @@ where
         }
     }
 
+    // Remove the Options from the layout and verify all nodes are laid out.
     let mut res = laid_out.into_iter().flatten().collect::<Vec<_>>();
     assert!(res.len() == nodes.len(), "all nodes are laid out");
 
+    // Invert the y axis, such that the root is at the bottom and no node has negative coordinates.
     if let Some(bounds) = Rect::bounded(&res) {
         for rect in res.iter_mut() {
             rect.y = bounds.height - rect.bottom();
