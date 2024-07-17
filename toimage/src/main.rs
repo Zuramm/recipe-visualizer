@@ -20,11 +20,13 @@ const MARGIN_PAGE: f64 = 40.0;
 const MARGIN_BOX: f64 = 10.0;
 const SPACING_TEXT: f64 = 5.0;
 
+const FONT_SIZE_RECIPE_TITLE: f64 = 20.0;
 const FONT_SIZE_TITLE: f64 = 20.0;
 const FONT_SIZE_NOTE: f64 = 12.0;
 const FONT_SIZE_INGREDIENTS: f64 = 12.0;
 const FONT_SIZE_UTENSILS: f64 = 12.0;
 
+const LINE_HEIGHT_RECIPE_TITLE: f64 = 24.0;
 const LINE_HEIGHT_TITLE: f64 = 24.0;
 const LINE_HEIGHT_NOTE: f64 = 14.0;
 const LINE_HEIGHT_INGREDIENTS: f64 = 14.0;
@@ -65,6 +67,7 @@ impl Colors {
 }
 
 struct Fonts {
+    recipe_title: FontDescription,
     title: FontDescription,
     note: FontDescription,
     ingredients: FontDescription,
@@ -73,8 +76,11 @@ struct Fonts {
 
 impl Fonts {
     fn new() -> Self {
-        // NOTE: Font size is the distance between the baseline and the ascender line. In other
-        // words the height of capital letters like I.
+        let mut recipe_title = FontDescription::new();
+        recipe_title.set_family("Inria Serif");
+        recipe_title.set_absolute_size(FONT_SIZE_RECIPE_TITLE * PANGO_SCALE as f64);
+        recipe_title.set_weight(pango::Weight::Bold);
+
         let mut title = FontDescription::new();
         title.set_family("Inria Serif");
         title.set_absolute_size(FONT_SIZE_TITLE * PANGO_SCALE as f64);
@@ -94,6 +100,7 @@ impl Fonts {
         utensils.set_absolute_size(FONT_SIZE_UTENSILS * PANGO_SCALE as f64);
 
         Self {
+            recipe_title,
             title,
             note,
             ingredients,
@@ -305,17 +312,36 @@ fn main() -> Result<(), MainError> {
     let rects = layout(&nodes, &edges, SPACING, SPACING)?;
     let bounds = Rect::bounded(&rects).expect("`rects` should contain more than one element");
     let nodes = nodes.into_iter().zip(rects).collect::<Vec<_>>();
+
+    let attrs = AttrList::new();
+    attrs.insert(AttrInt::new_line_height_absolute(
+        (LINE_HEIGHT_RECIPE_TITLE * PANGO_SCALE as f64) as i32,
+    ));
+    let text_recipe_title = create_layout(&paint_ctx);
+    text_recipe_title.set_width((bounds.width * PANGO_SCALE as f64) as i32);
+    text_recipe_title.set_font_description(Some(&fonts.recipe_title));
+    text_recipe_title.set_attributes(Some(&attrs));
+    text_recipe_title.set_text(&recipe.name);
+    let (_, lh) = text_recipe_title.size();
+    let height_recipe_title = lh as f64 / PANGO_SCALE as f64;
+
     let surface = ImageSurface::create(
         cairo::Format::Rgb24,
         (bounds.width + MARGIN_PAGE * 2.0).ceil() as i32,
-        (bounds.height + MARGIN_PAGE * 2.0).ceil() as i32,
+        (bounds.height + MARGIN_PAGE * 2.0 + height_recipe_title + SPACING).ceil() as i32,
     )?;
     let ctx = Context::new(&surface)?;
     ctx.translate(MARGIN_PAGE, MARGIN_PAGE);
 
-    // draw background
+    // draw background //////
     ctx.set_source(&colors.background)?;
     ctx.paint()?;
+
+    // draw title ///////////
+    ctx.set_source(&colors.text)?;
+    ctx.move_to(0.0, 0.0);
+    show_layout(&ctx, &text_recipe_title);
+    ctx.translate(0.0, lh as f64 / PANGO_SCALE as f64 + SPACING);
 
     // draw boxes ///////////
     ctx.set_source(&colors.box_)?;
