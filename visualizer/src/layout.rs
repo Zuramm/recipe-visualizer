@@ -7,7 +7,7 @@ use std::{
 
 use petgraph::{
     algo::{
-        bellman_ford::{bellman_ford, Paths},
+        bellman_ford::{self, bellman_ford, Paths},
         is_cyclic_directed,
     },
     prelude::*,
@@ -188,6 +188,49 @@ where
     graph
 }
 
+fn get_leafs_in_predecessors(predecessors: &[Option<NodeIndex>]) -> Vec<NodeIndex> {
+    let mut is_leaf = vec![true; predecessors.len()];
+    for pred in predecessors.iter() {
+        if let Some(pred) = pred {
+            is_leaf[pred.index()] = false;
+        }
+    }
+    is_leaf
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, is_leaf)| {
+            if is_leaf {
+                Some(NodeIndex::new(i))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+fn get_path_from_node_in_predecessors(
+    predecessors: &[Option<NodeIndex>],
+    node: NodeIndex,
+) -> Vec<NodeIndex> {
+    let mut path = vec![node];
+    while let Some(pred) = predecessors[path.last().expect("paths to not be empty").index()] {
+        path.push(pred);
+    }
+    path.reverse();
+    path
+}
+
+fn extract_paths_longest_first(path: &bellman_ford::Paths<NodeIndex, f64>) -> Vec<Vec<NodeIndex>> {
+    let mut leafs = get_leafs_in_predecessors(&path.predecessors);
+    leafs.sort_by(|a, b| f64::total_cmp(&path.distances[a.index()], &path.distances[b.index()]));
+    leafs.reverse();
+
+    leafs
+        .into_iter()
+        .map(|node| get_path_from_node_in_predecessors(&path.predecessors, node))
+        .collect::<Vec<_>>()
+}
+
 fn get_and_remove_longest_path(
     paths: &mut Paths<NodeIndex<u32>, f64>,
 ) -> Option<Vec<NodeIndex<u32>>> {
@@ -321,6 +364,15 @@ where
         return Ok(Vec::new());
     }
 
+    if nodes.len() == 1 {
+        return Ok(vec![Rect {
+            x: Coordinates::default(),
+            y: Coordinates::default(),
+            width: nodes[0].get_width(),
+            height: nodes[0].get_height(),
+        }]);
+    }
+
     let graph = create_graph(nodes, edges);
 
     // Ensure that the graph has no cycles
@@ -348,8 +400,9 @@ where
     // Run the bellman-ford algorithm on the graph and update the distances such that each distance
     // is furthest reachable from the current node. This allows for a greedy aproach when layouting
     // the graph.
-    let paths_from_root = {
-        let mut paths = bellman_ford(&graph, root).expect("graph should not be cyclic");
+    let paths_from_root = bellman_ford(&graph, root).expect("graph should not be cyclic");
+    let furthest_distances = {
+        let mut paths = paths_from_root.clone();
         let mut to_visit = paths
             .distances
             .iter()
@@ -366,7 +419,7 @@ where
             }
         }
 
-        paths
+        paths.distances
     };
 
     // Prepare the layout and initialze with the root at Coordinates (0, 0).
@@ -378,7 +431,7 @@ where
         height: graph[root].get_height(),
     });
 
-    // In a breadth first search, to layout each node while checking for overlaps and pushing nodes to
+    // In a depth first search, to layout each node while checking for overlaps and pushing nodes to
     // resolve the oevrlap.
     let mut just_laid_out = VecDeque::from([root]);
 
@@ -397,8 +450,8 @@ where
         // a and b are equal.
         successors.sort_by(|a, b| {
             f64::total_cmp(
-                &paths_from_root.distances[a.index()],
-                &paths_from_root.distances[b.index()],
+                &furthest_distances[a.index()],
+                &furthest_distances[b.index()],
             )
         });
         successors.reverse();
@@ -408,27 +461,14 @@ where
             .as_ref()
             .expect("only laid out nodes are in the queue");
         let mut x = rect.x;
-        for i in successors {
+        for i in successors.iter().copied() {
             // Assign naive position.
-            let mut srect = Rect {
+            let srect = Rect {
                 x,
                 y: rect.bottom() + spacing_y,
                 width: graph[i].get_width(),
                 height: graph[i].get_height(),
             };
-            // Push all laid out children of the current node up the resolve the overlap. Repeat
-            // until the is no overlap.
-            while let Some(overlap) = laid_out
-                .iter()
-                .flatten()
-                .flat_map(|r| {
-                    srect.intersection(&r.extend_right_bottom(Coordinates::default(), spacing_y))
-                })
-                .max_by(|a, b| a.height.partial_cmp(&b.height).unwrap())
-            {
-                srect.y += overlap.height;
-                push_node_children(&graph, &mut laid_out, next, overlap.height);
-            }
             // Commit the layout and prepare variables for the next iteration.
             x += srect.width + spacing_x;
             laid_out[i.index()] = Some(srect);
@@ -440,17 +480,53 @@ where
     }
 
     // Remove the Options from the layout and verify all nodes are laid out.
-    let mut res = laid_out.into_iter().flatten().collect::<Vec<_>>();
-    assert!(res.len() == nodes.len(), "all nodes are laid out");
+    let mut layout = laid_out.into_iter().flatten().collect::<Vec<_>>();
+    assert!(layout.len() == nodes.len(), "all nodes are laid out");
+
+    let mut paths = extract_paths_longest_first(&paths_from_root);
+
+    let main_path = paths.remove(0);
+
+    for path in paths {
+        for i in path {
+            // Push all laid out children of the current node up the resolve the overlap. Repeat
+            // until the is no overlap.
+            while let Some((j, _overlap)) = layout
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| i.index() != *j)
+                .flat_map(|(j, r)| {
+                    layout[i.index()]
+                        .intersection(&r.extend_right_bottom(Coordinates::default(), spacing_y))
+                        .map(|overlap| (j, overlap))
+                })
+                .max_by(|a, b| a.1.height.partial_cmp(&b.1.height).unwrap())
+            {
+                let mut shift = i;
+                while !main_path.contains(&shift) {
+                    shift = paths_from_root.predecessors[shift.index()]
+                        .expect("this path to be connected with `main_path`");
+                }
+                let amount = layout[i.index()].y - (layout[j].bottom() + spacing_y);
+                println!("{}", shift.index());
+                depth_first_search(&graph, Some(shift), |event| {
+                    if let DfsEvent::Discover(node, _) = event {
+                        layout[node.index()].y -= amount;
+                    }
+                    Control::<()>::Continue
+                });
+            }
+        }
+    }
 
     // Invert the y axis, such that the root is at the bottom and no node has negative coordinates.
-    if let Some(bounds) = Rect::bounded(&res) {
-        for rect in res.iter_mut() {
+    if let Some(bounds) = Rect::bounded(&layout) {
+        for rect in layout.iter_mut() {
             rect.y = bounds.height - rect.bottom();
         }
     }
 
-    Ok(res)
+    Ok(layout)
 }
 
 pub fn layout_proportional<NodeWeight, Coordinates>(
@@ -747,7 +823,7 @@ mod tests {
         let nodes = vec![NODE, Size(40, 20), NODE, NODE, NODE];
         let edges = vec![(0, 1), (1, 2), (1, 3), (0, 4)];
         let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
+        println!("result: {result:?}");
         assert_eq!(result.len(), 5);
         assert_graph!(2; is above 1; in result);
         assert_graph!(3; is above 1; in result);
@@ -824,7 +900,7 @@ mod tests {
             (0, 12),
         ];
         let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:?}");
+        println!("result: {result:?}");
         // assert_eq!(result.len(), 5);
         // assert_graph!(1; is above 0; in result);
         // assert_graph!(2; is above 0; in result);

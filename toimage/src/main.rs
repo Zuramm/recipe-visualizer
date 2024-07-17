@@ -260,6 +260,10 @@ fn get_layout_size(layout: &pango::Layout) -> (f64, f64) {
 struct Args {
     /// Path to recipe file in ron format
     recipe: PathBuf,
+
+    /// Show the id of each node; for debugging purposes
+    #[arg(long)]
+    show_ids: bool,
 }
 
 #[derive(Debug, Error)]
@@ -536,6 +540,14 @@ fn main_() -> Result<(), MainError> {
             ctx.set_source(&colors.text)?;
             show_layout(&ctx, text);
             // y += text.size().1 as f64 / PANGO_SCALE as f64;
+        }
+    }
+
+    if args.show_ids {
+        ctx.set_source_rgb(1.0, 0.0, 0.0);
+        for (i, (_step, rect)) in nodes.iter().enumerate() {
+            ctx.move_to(rect.left(), rect.bottom());
+            ctx.show_text(&i.to_string())?;
         }
     }
 
