@@ -248,6 +248,11 @@ impl Timed for SizedStep {
     }
 }
 
+fn get_layout_size(layout: &pango::Layout) -> (f64, f64) {
+    let (w, h) = layout.size();
+    (w as f64 / PANGO_SCALE as f64, h as f64 / PANGO_SCALE as f64)
+}
+
 #[derive(Debug, Error)]
 enum MainError {
     #[error("Layout error: {0}")]
@@ -325,10 +330,59 @@ fn main() -> Result<(), MainError> {
     let (_, lh) = text_recipe_title.size();
     let height_recipe_title = lh as f64 / PANGO_SCALE as f64;
 
+    let mut width_ingredients = (0.0f64, 0.0f64);
+    let mut height_ingredients = 0.0;
+    let mut text_ingredients = Vec::<(Option<pango::Layout>, pango::Layout)>::new();
+    let attrs = AttrList::new();
+    attrs.insert(AttrInt::new_line_height_absolute(
+        (LINE_HEIGHT_INGREDIENTS * PANGO_SCALE as f64) as i32,
+    ));
+    for ingredient in recipe.ingredients {
+        let mut height = 0.0;
+
+        let text_amount = ingredient.amount.map(|amount| {
+            let layout = create_layout(&paint_ctx);
+            layout.set_font_description(Some(&fonts.ingredients));
+            layout.set_attributes(Some(&attrs));
+            layout.set_text(&amount);
+            let (lw, lh) = layout.size();
+            let width = lw as f64 / PANGO_SCALE as f64;
+            width_ingredients.0 = width_ingredients.0.max(width);
+            height = lh as f64 / PANGO_SCALE as f64;
+            layout
+        });
+
+        let name = match ingredient.comment {
+            Some(comment) => format!("{} ({})", ingredient.name, comment),
+            None => ingredient.name,
+        };
+        let text_name = create_layout(&paint_ctx);
+        text_name.set_font_description(Some(&fonts.ingredients));
+        text_name.set_attributes(Some(&attrs));
+        text_name.set_text(&name);
+        let (lw, lh) = text_name.size();
+        let width = lw as f64 / PANGO_SCALE as f64;
+        width_ingredients.1 = width_ingredients.1.max(width);
+        height = height.max(lh as f64 / PANGO_SCALE as f64);
+
+        height_ingredients += height;
+        text_ingredients.push((text_amount, text_name));
+    }
+
     let surface = ImageSurface::create(
         cairo::Format::Rgb24,
-        (bounds.width + MARGIN_PAGE * 2.0).ceil() as i32,
-        (bounds.height + MARGIN_PAGE * 2.0 + height_recipe_title + SPACING).ceil() as i32,
+        (MARGIN_PAGE * 2.0
+            + width_ingredients.0
+            + SPACING_TEXT
+            + width_ingredients.1
+            + SPACING
+            + bounds.width)
+            .ceil() as i32,
+        (MARGIN_PAGE * 2.0
+            + height_recipe_title
+            + SPACING
+            + f64::max(height_ingredients, bounds.height))
+        .ceil() as i32,
     )?;
     let ctx = Context::new(&surface)?;
     ctx.translate(MARGIN_PAGE, MARGIN_PAGE);
@@ -342,6 +396,26 @@ fn main() -> Result<(), MainError> {
     ctx.move_to(0.0, 0.0);
     show_layout(&ctx, &text_recipe_title);
     ctx.translate(0.0, lh as f64 / PANGO_SCALE as f64 + SPACING);
+
+    // draw ingredients /////
+    let mut y = 0.0;
+    for (amount, name) in text_ingredients {
+        let mut height = 0.0;
+        if let Some(amount) = amount {
+            let (lw, lh) = get_layout_size(&amount);
+            ctx.move_to(width_ingredients.0 - lw, y);
+            show_layout(&ctx, &amount);
+            height = lh;
+        }
+        ctx.move_to(width_ingredients.0 + SPACING_TEXT, y);
+        show_layout(&ctx, &name);
+        height = height.max(get_layout_size(&name).1);
+        y += height;
+    }
+    ctx.translate(
+        width_ingredients.0 + SPACING_TEXT + width_ingredients.1 + SPACING,
+        0.0,
+    );
 
     // draw boxes ///////////
     ctx.set_source(&colors.box_)?;

@@ -1,5 +1,62 @@
 (
     name: "Hackbällchen Toskana Auflauf",
+    ingredients: [
+        (
+            amount: Some("500g"),
+            name: "ground beef",
+            comment: None,
+        ),
+        (
+            amount: Some("1"),
+            name: "garlic clove",
+            comment: None,
+        ),
+        (
+            amount: None,
+            name: "sea salt",
+            comment: None,
+        ),
+        (
+            amount: None,
+            name: "paprika pepper",
+            comment: None,
+        ),
+        (
+            amount: Some("1"),
+            name: "egg",
+            comment: Some("size M"),
+        ),
+        (
+            amount: Some("2tbsp"),
+            name: "breadcrumbs",
+            comment: None,
+        ),
+        (
+            amount: Some("100g"),
+            name: "Cream",
+            comment: Some("30% fat"),
+        ),
+        (
+            amount: Some("2tbsp"),
+            name: "tomato paste",
+            comment: None,
+        ),
+        (
+            amount: Some("400g"),
+            name: "chopped tomatoes",
+            comment: None,
+        ),
+        (
+            amount: None,
+            name: "raw cane sugar",
+            comment: None,
+        ),
+        (
+            amount: Some("125g"),
+            name: "mozzarella",
+            comment: Some("45%"),
+        ),
+    ],
     steps: [
         (
             time_s: 300,

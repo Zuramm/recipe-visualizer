@@ -13,9 +13,17 @@ pub struct Step {
     pub requires: Vec<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ingredient {
+    pub amount: Option<String>,
+    pub name: String,
+    pub comment: Option<String>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Recipe {
     pub name: String,
+    pub ingredients: Vec<Ingredient>,
     pub steps: Vec<Step>,
 }
 
