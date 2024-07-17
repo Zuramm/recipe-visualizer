@@ -1,8 +1,9 @@
 use cairo::{Context, ImageSurface, Pattern};
+use clap::Parser;
 use hyphenation::{Hyphenator, Load};
 use pango::{ffi::PANGO_SCALE, AttrInt, AttrList, FontDescription};
 use pangocairo::functions::{create_layout, show_layout};
-use std::{f64, fs::File, io};
+use std::{f64, fs::File, io, path::PathBuf};
 use thiserror::Error;
 use visualizer::{
     layout::{layout, LayoutError, Rect, Timed, VisuallySized},
@@ -253,6 +254,14 @@ fn get_layout_size(layout: &pango::Layout) -> (f64, f64) {
     (w as f64 / PANGO_SCALE as f64, h as f64 / PANGO_SCALE as f64)
 }
 
+/// Generate an image for a recipe with a name, ingredients, and a graph for the instructions
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path to recipe file in ron format
+    recipe: PathBuf,
+}
+
 #[derive(Debug, Error)]
 enum MainError {
     #[error("Layout error: {0}")]
@@ -276,7 +285,7 @@ impl From<cairo::IoError> for MainError {
     }
 }
 
-fn main() -> Result<(), MainError> {
+fn main_() -> Result<(), MainError> {
     // 0
     // let file = File::open("recipe_single.ron")?;
 
@@ -295,8 +304,11 @@ fn main() -> Result<(), MainError> {
     // 10 11
     //  |/
     // 12
-    let file = File::open("recipe_toscana.ron")?;
+    // let file = File::open("recipe_toscana.ron")?;
 
+    let args = Args::parse();
+
+    let file = File::open(args.recipe)?;
     let recipe: Recipe = ron::de::from_reader(&file)?;
 
     let en_us = hyphenation::Standard::from_embedded(hyphenation::Language::EnglishUS)?;
@@ -531,4 +543,11 @@ fn main() -> Result<(), MainError> {
     surface.write_to_png(&mut file)?;
 
     Ok(())
+}
+
+fn main() {
+    if let Err(error) = main_() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
 }

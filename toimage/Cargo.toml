@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 cairo-rs = { version = "0.20.0", features = ["png"] }
+clap = { version = "4.5.9", features = ["derive"] }
 hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 pango = { version = "0.20.0", features = ["v1_52"] }
 pangocairo = "0.20.0"
