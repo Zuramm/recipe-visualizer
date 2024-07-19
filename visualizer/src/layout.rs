@@ -21,8 +21,8 @@ pub trait VisuallySized<Coordinates> {
 }
 
 pub trait Timed {
-    fn get_duration(&self) -> f64 {
-        1.0
+    fn get_duration(&self) -> u32 {
+        1
     }
 }
 
@@ -39,6 +39,17 @@ impl<Coordinates> Rect<Coordinates> {
         Self {
             x,
             y,
+            width,
+            height,
+        }
+    }
+}
+
+impl<Coordinates: Default> Rect<Coordinates> {
+    pub fn sized(width: Coordinates, height: Coordinates) -> Self {
+        Self {
+            x: Coordinates::default(),
+            y: Coordinates::default(),
             width,
             height,
         }
@@ -148,29 +159,54 @@ impl<
         let bottom = max(self.bottom(), other.bottom())?;
         Some(Self::from_sides(left, top, right, bottom))
     }
+}
 
-    pub fn bounded(rects: &[Self]) -> Option<Self> {
-        let mut iter = rects.iter();
-        iter.next().map(|first| {
-            iter.fold(first.clone(), |bounds, rect| match bounds.union(rect) {
-                Some(bounds) => bounds,
-                None => bounds.clone(),
-            })
+impl<
+        'a,
+        Coordinates: Default + Copy + Add<Output = Coordinates> + Sub<Output = Coordinates> + PartialOrd + 'a,
+    > Rect<Coordinates>
+{
+    pub fn bounded<T: Iterator<Item = &'a Self>>(mut iter: T) -> Option<Self> {
+        iter.next().and_then(|first| {
+            let mut left = first.left();
+            let mut top = first.top();
+            let mut right = first.right();
+            let mut bottom = first.bottom();
+            for rect in iter {
+                left = min(left, rect.left())?;
+                top = min(top, rect.top())?;
+                right = max(right, rect.right())?;
+                bottom = max(bottom, rect.bottom())?;
+            }
+            Some(Self::from_sides(left, top, right, bottom))
+        })
+    }
+}
+
+impl Rect<u32> {
+    pub fn bounded_nodes<T: Iterator<Item = (u32, u32)>>(mut iter: T) -> Option<Self> {
+        iter.next().map(|(x, y)| {
+            let (left, top, right, bottom) = iter.fold(
+                (x, y, x + 1, y + 1),
+                |(left, top, right, bottom), (x, y)| {
+                    (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1))
+                },
+            );
+            Rect::from_sides(left, top, right, bottom)
         })
     }
 }
 
 /// Creates a graph from nodes and edges. The duration of the target node is used for the weight of
 /// each edge.
-fn create_graph<'a, NodeWeight, Coordinates>(
+fn create_graph<'a, NodeWeight>(
     nodes: &'a [NodeWeight],
     edges: &[(usize, usize)],
 ) -> DiGraph<&'a NodeWeight, f64>
 where
-    NodeWeight: VisuallySized<Coordinates> + Timed,
-    f64: From<Coordinates>,
+    NodeWeight: Timed,
 {
-    let mut graph = DiGraph::<&NodeWeight, f64>::new();
+    let mut graph = DiGraph::<&'a NodeWeight, f64>::new();
 
     // initialize arrays and calculate dimensions
     for (i, node) in nodes.iter().enumerate() {
@@ -182,7 +218,7 @@ where
         let weight = nodes[to].get_duration();
         let from = graph.from_index(from);
         let to = graph.from_index(to);
-        graph.add_edge(from, to, weight);
+        graph.add_edge(from, to, weight.into());
     }
 
     graph
@@ -190,10 +226,8 @@ where
 
 fn get_leafs_in_predecessors(predecessors: &[Option<NodeIndex>]) -> Vec<NodeIndex> {
     let mut is_leaf = vec![true; predecessors.len()];
-    for pred in predecessors.iter() {
-        if let Some(pred) = pred {
-            is_leaf[pred.index()] = false;
-        }
+    for pred in predecessors.iter().flatten() {
+        is_leaf[pred.index()] = false;
     }
     is_leaf
         .into_iter()
@@ -342,35 +376,19 @@ pub enum LayoutError {
     GraphHasMultipleRoots { roots: Vec<usize> },
 }
 
-pub fn layout<NodeWeight, Coordinates>(
+pub fn layout<NodeWeight>(
     nodes: &[NodeWeight],
     edges: &[(usize, usize)],
-    spacing_x: Coordinates,
-    spacing_y: Coordinates,
-) -> Result<Vec<Rect<Coordinates>>, LayoutError>
+) -> Result<Vec<(u32, u32)>, LayoutError>
 where
-    NodeWeight: VisuallySized<Coordinates> + Timed,
-    Coordinates: Add<Output = Coordinates>
-        + AddAssign
-        + Sub<Output = Coordinates>
-        + SubAssign
-        + PartialOrd
-        + Default
-        + Copy
-        + Debug,
-    f64: From<Coordinates>,
+    NodeWeight: Timed,
 {
     if nodes.is_empty() {
         return Ok(Vec::new());
     }
 
     if nodes.len() == 1 {
-        return Ok(vec![Rect {
-            x: Coordinates::default(),
-            y: Coordinates::default(),
-            width: nodes[0].get_width(),
-            height: nodes[0].get_height(),
-        }]);
+        return Ok(vec![(0, 0)]);
     }
 
     let graph = create_graph(nodes, edges);
@@ -402,47 +420,40 @@ where
     // the graph.
     let paths_from_root = bellman_ford(&graph, root).expect("graph should not be cyclic");
     let furthest_distances = {
-        let mut paths = paths_from_root.clone();
-        let mut to_visit = paths
-            .distances
-            .iter()
-            .copied()
-            .enumerate()
-            .collect::<Vec<_>>();
-        to_visit.sort_by(|a, b| f64::total_cmp(&b.1, &a.1));
+        let mut distances = paths_from_root.distances.clone();
+        let mut to_visit = distances.iter().copied().enumerate().collect::<Vec<_>>();
+        to_visit.sort_by(|a, b| {
+            f64::partial_cmp(&b.1, &a.1)
+                .expect("distances to not be NaN, since they've been aquired from u32")
+        });
 
         for (i, dist) in to_visit {
             let mut i = i;
-            while let Some(j) = paths.predecessors[i] {
+            while let Some(j) = paths_from_root.predecessors[i] {
                 i = j.index();
-                paths.distances[i] = paths.distances[i].max(dist);
+                distances[i] = distances[i].max(dist);
             }
         }
 
-        paths.distances
+        distances
     };
 
     // Prepare the layout and initialze with the root at Coordinates (0, 0).
-    let mut laid_out: Vec<Option<Rect<Coordinates>>> = vec![None; nodes.len()];
-    laid_out[root.index()] = Some(Rect {
-        x: Coordinates::default(),
-        y: Coordinates::default(),
-        width: graph[root].get_width(),
-        height: graph[root].get_height(),
-    });
+    let mut laid_out: Vec<Option<(u32, u32)>> = vec![None; nodes.len()];
+    laid_out[root.index()] = Some((0, 0));
 
     // In a depth first search, to layout each node while checking for overlaps and pushing nodes to
     // resolve the oevrlap.
     let mut just_laid_out = VecDeque::from([root]);
 
-    while let Some(next) = just_laid_out.pop_front() {
+    while let Some(current) = just_laid_out.pop_front() {
         // Get the successors for the current node and sort them using their assigned distance,
         // which contains the furthest distance. In other words nodes along the longest path are on
         // the left and nodes olong the shortest path are on the right.
         let mut successors = graph
-            .edges_directed(next, petgraph::Direction::Outgoing)
-            .map(|i| i.target())
-            .filter(|i| laid_out[i.index()].is_none())
+            .edges_directed(current, petgraph::Direction::Outgoing)
+            .map(|j| j.target())
+            .filter(|j| laid_out[j.index()].is_none())
             .collect::<Vec<_>>();
         // NOTE: Sort needs to be stable, so that if the distances are equal the first defined is
         // preferred.
@@ -457,25 +468,18 @@ where
         successors.reverse();
 
         // Layout the beneath the current node and and next to each other.
-        let mut rect = laid_out[next.index()]
-            .as_ref()
-            .expect("only laid out nodes are in the queue");
-        let mut x = rect.x;
+        let (current_x, mut current_y) =
+            laid_out[current.index()].expect("only laid out nodes are in the queue");
+        let mut x = current_x;
         for i in successors.iter().copied() {
             // Assign naive position.
-            let srect = Rect {
-                x,
-                y: rect.bottom() + spacing_y,
-                width: graph[i].get_width(),
-                height: graph[i].get_height(),
-            };
+            let succ = (x, current_y + 1);
             // Commit the layout and prepare variables for the next iteration.
-            x += srect.width + spacing_x;
-            laid_out[i.index()] = Some(srect);
+            x += 1;
+            laid_out[i.index()] = Some(succ);
             just_laid_out.push_back(i);
-            rect = laid_out[next.index()]
-                .as_ref()
-                .expect("only laid out nodes are in the queue");
+            (_, current_y) =
+                laid_out[current.index()].expect("only laid out nodes are in the queue");
         }
     }
 
@@ -495,23 +499,21 @@ where
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| i.index() != *j)
-                .flat_map(|(j, r)| {
-                    layout[i.index()]
-                        .intersection(&r.extend_right_bottom(Coordinates::default(), spacing_y))
-                        .map(|overlap| (j, overlap))
+                .filter(|(_, b)| {
+                    let a = &layout[i.index()];
+                    a == *b
                 })
-                .max_by(|a, b| a.1.height.partial_cmp(&b.1.height).unwrap())
+                .max_by_key(|(_, pos)| *pos)
             {
                 let mut shift = i;
                 while !main_path.contains(&shift) {
                     shift = paths_from_root.predecessors[shift.index()]
                         .expect("this path to be connected with `main_path`");
                 }
-                let amount = layout[i.index()].y - (layout[j].bottom() + spacing_y);
-                println!("{}", shift.index());
+                let amount = 1;
                 depth_first_search(&graph, Some(shift), |event| {
                     if let DfsEvent::Discover(node, _) = event {
-                        layout[node.index()].y -= amount;
+                        layout[node.index()].1 += amount;
                     }
                     Control::<()>::Continue
                 });
@@ -519,14 +521,12 @@ where
         }
     }
 
-    // Invert the y axis, such that the root is at the bottom and no node has negative coordinates.
-    if let Some(bounds) = Rect::bounded(&layout) {
-        for rect in layout.iter_mut() {
-            rect.y = bounds.height - rect.bottom();
-        }
-    }
+    let bounds = Rect::bounded_nodes(layout.iter().copied()).expect("at least 1 node to exist");
 
-    Ok(layout)
+    Ok(layout
+        .into_iter()
+        .map(|(x, y)| (x, bounds.height - (y + 1)))
+        .collect::<Vec<_>>())
 }
 
 pub fn layout_proportional<NodeWeight, Coordinates>(
@@ -645,7 +645,7 @@ where
     let mut res = laid_out.into_iter().flatten().collect::<Vec<_>>();
     assert!(res.len() == nodes.len(), "all nodes are laid out");
 
-    if let Some(bounds) = Rect::bounded(&res) {
+    if let Some(bounds) = Rect::bounded(res.iter()) {
         for rect in res.iter_mut() {
             rect.y = bounds.height - rect.bottom();
         }
@@ -659,49 +659,18 @@ mod tests {
     use super::*;
 
     #[derive(Clone, Copy)]
-    struct Size(u32, u32);
-
-    impl VisuallySized<u32> for Size {
-        fn get_width(&self) -> u32 {
-            self.0
-        }
-
-        fn get_height(&self) -> u32 {
-            self.1
-        }
-    }
+    struct Size(u32);
 
     impl Timed for Size {
-        fn get_duration(&self) -> f64 {
-            self.1 as f64
+        fn get_duration(&self) -> u32 {
+            self.0
         }
-    }
-
-    impl Size {
-        fn positioned(self, x: u32, y: u32) -> Rect<u32> {
-            Rect {
-                x,
-                y,
-                width: self.0,
-                height: self.1,
-            }
-        }
-    }
-
-    const NODE: Size = Size(40, 30);
-    const SPACING: u32 = 10;
-
-    fn position(positions: Vec<(u32, u32)>) -> Vec<Rect<u32>> {
-        positions
-            .into_iter()
-            .map(|(x, y)| NODE.positioned(x * (NODE.0 + SPACING), y * (NODE.1 + SPACING)))
-            .collect()
     }
 
     macro_rules! assert_graph {
         ($a:expr; is above $b:expr; in $result:expr) => {
             assert!(
-                $result[$a].bottom() + SPACING == $result[$b].top(),
+                $result[$a].1 + 1 == $result[$b].1,
                 "node {} ({:?}) is above {} ({:?})",
                 $a,
                 $result[$a],
@@ -712,7 +681,7 @@ mod tests {
         ($($n:expr),+; are in column $col:expr; in $result:expr) => {
             {$(
                 assert_eq!(
-                    $result[$n].x, $col,
+                    $result[$n].0, $col,
                     "node {} ({:?}) is in column {}",
                     $n, $result[$n], $col
                 )
@@ -725,20 +694,20 @@ mod tests {
         let nodes: Vec<Size> = vec![];
         let edges = vec![];
 
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        assert_eq!(result.len(), 0);
+        let result = layout(&nodes, &edges)?;
+        assert_eq!(result, vec![]);
         Ok(())
     }
 
     #[test]
     fn one_node() -> Result<(), LayoutError> {
         // 0
-        let nodes = vec![NODE];
+        let nodes = vec![Size(1)];
         let edges = vec![];
 
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
-        assert_eq!(result.len(), 1);
+        let result = layout(&nodes, &edges)?;
+        println!("result: {result:?}");
+        assert_eq!(result, vec![(0, 0)]);
         Ok(())
     }
 
@@ -747,10 +716,10 @@ mod tests {
         // 1
         // |
         // 0
-        let nodes = vec![NODE; 2];
+        let nodes = vec![Size(1); 2];
         let edges = vec![(0, 1)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
+        let result = layout(&nodes, &edges)?;
+        println!("result: {result:?}");
         assert_eq!(result.len(), 2);
         assert_graph!(1; is above 0; in result);
         assert_graph!(0, 1; are in column 0; in result);
@@ -759,184 +728,100 @@ mod tests {
 
     #[test]
     fn simple_branch() -> Result<(), LayoutError> {
-        // 1 2
+        // 2 1
         // |/
         // 0
-        let nodes = vec![NODE; 3];
+        let nodes = vec![Size(1), Size(1), Size(2)];
         let edges = vec![(0, 1), (0, 2)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
+        let result = layout(&nodes, &edges)?;
+        println!("result: {result:?}");
         assert_eq!(result.len(), 3);
         assert_graph!(1; is above 0; in result);
         assert_graph!(2; is above 0; in result);
-        assert_graph!(0, 1; are in column 0; in result);
-        assert_graph!(2; are in column 50; in result);
+        assert_graph!(0, 2; are in column 0; in result);
+        assert_graph!(1; are in column 1; in result);
         Ok(())
     }
 
     #[test]
-    fn simple_branch_with_one_arm_longer() -> Result<(), LayoutError> {
+    fn keep_node_order_intact_if_ambiguous() -> Result<(), LayoutError> {
+        // 1 2
+        // |/
+        // 0
+        let nodes = vec![Size(1), Size(1), Size(1)];
+        let edges = vec![(0, 1), (0, 2)];
+        let result = layout(&nodes, &edges)?;
+        println!("result: {result:?}");
+        assert_eq!(result.len(), 3);
+        assert_graph!(1; is above 0; in result);
+        assert_graph!(2; is above 0; in result);
+        assert_graph!(0, 1; are in column 0; in result);
+        assert_graph!(2; are in column 1; in result);
+        Ok(())
+    }
+
+    #[test]
+    fn branch_arm_with_more_nodes_longer() -> Result<(), LayoutError> {
         // 2
         // |
         // 1 3
         // |/
         // 0
-        let nodes = vec![NODE; 4];
+        let nodes = vec![Size(1); 4];
         let edges = vec![(0, 1), (1, 2), (0, 3)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
+        let result = layout(&nodes, &edges)?;
+        println!("result: {result:?}");
         assert_eq!(result.len(), 4);
         assert_graph!(1; is above 0; in result);
         assert_graph!(2; is above 1; in result);
         assert_graph!(3; is above 0; in result);
         assert_graph!(0, 1, 2; are in column 0; in result);
-        assert_graph!(3; are in column 50; in result);
+        assert_graph!(3; are in column 1; in result);
         Ok(())
     }
 
     #[test]
-    fn unequal_children() -> Result<(), LayoutError> {
-        // 1 2
-        // |/
-        // 0
-        let nodes = vec![NODE, NODE, Size(40, 20)];
-        let edges = vec![(0, 1), (0, 2)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
-        assert_eq!(result.len(), 3);
-        assert_graph!(1; is above 0; in result);
-        assert_graph!(2; is above 0; in result);
-        assert_graph!(0, 1; are in column 0; in result);
-        assert_graph!(2; are in column 50; in result);
-        Ok(())
-    }
-
-    // When placing nodes an tightly as possible, nodes 3 and 4 overlap. This overlap should be
-    // resolved by pushing nodes 1, 2, and 3 upwards.
-    #[test]
-    fn vertical_overlap() -> Result<(), LayoutError> {
-        // 2 3
-        // |/
-        // 1 4
-        // |/
-        // 0
-        let nodes = vec![NODE, Size(40, 20), NODE, NODE, NODE];
-        let edges = vec![(0, 1), (1, 2), (1, 3), (0, 4)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 5);
-        assert_graph!(2; is above 1; in result);
-        assert_graph!(3; is above 1; in result);
-        assert_graph!(4; is above 0; in result);
-        assert_graph!(0, 1, 2; are in column 0; in result);
-        assert_graph!(4, 3; are in column 50; in result);
-        Ok(())
-    }
-
-    #[test]
-    fn massive_child() -> Result<(), LayoutError> {
+    fn branch_arm_with_more_nodes_shorter() -> Result<(), LayoutError> {
         //   2
         //   |
         // 1 3
         // |/
         // 0
-        let nodes = [NODE, Size(40, 200), NODE, NODE];
-        let edges = [(0, 3), (3, 2), (0, 1)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("{result:#?}");
+        let nodes = vec![Size(1), Size(3), Size(1), Size(1)];
+        let edges = vec![(0, 1), (1, 2), (0, 3)];
+        let result = layout(&nodes, &edges)?;
+        println!("result: {result:?}");
         assert_eq!(result.len(), 4);
-        assert_graph!(3; is above 0; in result);
-        assert_graph!(2; is above 3; in result);
         assert_graph!(1; is above 0; in result);
-        assert_graph!(0, 1; are in column 0; in result);
-        assert_graph!(3, 2; are in column 50; in result);
+        assert_graph!(2; is above 1; in result);
+        assert_graph!(3; is above 0; in result);
+        assert_graph!(0, 1, 2; are in column 0; in result);
+        assert_graph!(3; are in column 1; in result);
         Ok(())
     }
 
+    // When placing nodes an tightly as possible, nodes 3 and 5 overlap. This overlap should be
+    // resolved by pushing nodes 1, 2, and 3 upwards.
     #[test]
-    fn toscana1() -> Result<(), LayoutError> {
-        // 7
-        // |
-        // 6
-        // |
-        // 5 9
+    fn vertical_overlap() -> Result<(), LayoutError> {
+        // 2 3
+        // |/
+        // 1 5
         // | |
-        // 4 8
-        // |/
-        // 3 10
-        // |/
-        // 2 11
-        // |/
-        // 1 12
+        // | 4
         // |/
         // 0
-        let nodes = [
-            Size(40, 60),
-            Size(40, 2100),
-            Size(40, 60),
-            Size(40, 60),
-            Size(40, 60),
-            Size(40, 600),
-            Size(40, 60),
-            Size(40, 300),
-            Size(40, 60),
-            Size(40, 60),
-            Size(40, 300),
-            Size(40, 600),
-            Size(40, 600),
-        ];
-        let edges = [
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (3, 4),
-            (4, 5),
-            (5, 6),
-            (6, 7),
-            (3, 8),
-            (8, 9),
-            (2, 10),
-            (1, 11),
-            (0, 12),
-        ];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
+        let nodes = vec![Size(1), Size(1), Size(2), Size(1), Size(1)];
+        let edges = vec![(0, 1), (1, 2), (1, 3), (0, 4), (4, 5)];
+        let result = layout(&nodes, &edges)?;
         println!("result: {result:?}");
-        // assert_eq!(result.len(), 5);
-        // assert_graph!(1; is above 0; in result);
-        // assert_graph!(2; is above 0; in result);
-        assert_graph!(0, 1, 2, 3,4,5,6,7; are in column 0; in result);
-        assert_graph!(12, 11, 10, 8, 9; are in column 50; in result);
-        Ok(())
-    }
-
-    #[test]
-    fn toscana2() -> Result<(), LayoutError> {
-        // 4
-        // |
-        // 3
-        // |
-        // 2 5
-        // |/
-        // 1 6
-        // |/
-        // 0
-        let nodes = [
-            Size(40, 60),  // 0
-            Size(40, 60),  // 1
-            Size(40, 60),  // 2
-            Size(40, 60),  // 3
-            Size(40, 600), // 4
-            Size(40, 300), // 5
-            Size(40, 600), // 6
-        ];
-        let edges = [(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (0, 6)];
-        let result = layout(&nodes, &edges, SPACING, SPACING)?;
-        println!("result: {result:?}");
-        // assert_eq!(result.len(), 5);
-        // assert_graph!(1; is above 0; in result);
-        // assert_graph!(2; is above 0; in result);
-        assert_graph!(0, 1, 2, 3, 4; are in column 0; in result);
-        assert_graph!(5, 6; are in column 50; in result);
+        assert_eq!(result.len(), 5);
+        assert_graph!(2; is above 1; in result);
+        assert_graph!(3; is above 1; in result);
+        assert_graph!(4; is above 0; in result);
+        assert_graph!(5; is above 4; in result);
+        assert_graph!(0, 1, 2; are in column 0; in result);
+        assert_graph!(4, 5, 3; are in column 1; in result);
         Ok(())
     }
 }

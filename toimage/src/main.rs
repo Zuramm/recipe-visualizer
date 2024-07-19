@@ -6,8 +6,8 @@ use pangocairo::functions::{create_layout, show_layout};
 use std::{f64, fs::File, io, path::PathBuf};
 use thiserror::Error;
 use visualizer::{
-    layout::{layout, LayoutError, Rect, Timed, VisuallySized},
-    Recipe, Step,
+    layout::{layout, LayoutError, Rect, Timed},
+    Ingredient, Recipe, Step,
 };
 
 const COLOR_WHITE: u32 = 0xffffffff;
@@ -128,130 +128,476 @@ fn place_hyphens(hyphen: &hyphenation::Standard, string: &str) -> String {
     hyphenated
 }
 
-struct SizedStep {
-    width: f64,
-    height_time: f64,
-    height_text: f64,
-    text_title: pango::Layout,
-    text_note: Option<pango::Layout>,
-    text_ingredients: Option<pango::Layout>,
-    text_utensils: Option<pango::Layout>,
+struct TextLayout {
+    layout: pango::Layout,
+    bounds: Rect<f64>,
 }
 
-impl SizedStep {
+impl TextLayout {
     fn new(
-        step: Step,
-        width: f64,
         ctx: &cairo::Context,
-        fonts: &Fonts,
-        hyphen: &hyphenation::Standard,
-    ) -> Result<Self, ()> {
-        let height_time = step.time_s as f64;
-        let mut height_text = MARGIN_BOX * 2.0;
-
-        let tw = ((width - MARGIN_BOX * 2.0) * PANGO_SCALE as f64) as i32;
-
-        let title = place_hyphens(hyphen, &step.title);
+        max_width: Option<(&hyphenation::Standard, f64)>,
+        font: &FontDescription,
+        text: &str,
+        line_height: f64,
+    ) -> Self {
+        let text = if let Some((hyphen, _)) = max_width {
+            place_hyphens(hyphen, text)
+        } else {
+            text.to_owned()
+        };
         let attrs = AttrList::new();
         attrs.insert(AttrInt::new_line_height_absolute(
-            (LINE_HEIGHT_TITLE * PANGO_SCALE as f64) as i32,
+            (line_height * PANGO_SCALE as f64) as i32,
         ));
-        let text_title = create_layout(ctx);
-        text_title.set_width(tw);
-        text_title.set_font_description(Some(&fonts.title));
-        text_title.set_attributes(Some(&attrs));
-        text_title.set_text(&title);
-        let (_, lh) = text_title.size();
-        height_text += lh as f64 / PANGO_SCALE as f64;
+        let layout = create_layout(ctx);
+        if let Some((_, max_width)) = max_width {
+            layout.set_width((max_width * PANGO_SCALE as f64) as i32);
+        }
+        layout.set_font_description(Some(font));
+        layout.set_attributes(Some(&attrs));
+        layout.set_text(&text);
+        let (width, height) = layout.size();
+        let bounds = Rect::sized(
+            width as f64 / PANGO_SCALE as f64,
+            height as f64 / PANGO_SCALE as f64,
+        );
+        Self { layout, bounds }
+    }
 
-        let text_note = step.note.map(|note| {
-            let note = place_hyphens(hyphen, &note);
-            let attrs = AttrList::new();
-            attrs.insert(AttrInt::new_line_height_absolute(
-                (LINE_HEIGHT_NOTE * PANGO_SCALE as f64) as i32,
-            ));
-            let layout = create_layout(ctx);
-            layout.set_width(tw);
-            layout.set_font_description(Some(&fonts.note));
-            layout.set_attributes(Some(&attrs));
-            layout.set_text(&note);
-            let (_, lh) = layout.size();
-            height_text += lh as f64 / PANGO_SCALE as f64;
+    fn draw(&self, ctx: &cairo::Context) -> Result<(), cairo::Error> {
+        ctx.save()?;
+        ctx.move_to(self.bounds.x, self.bounds.y);
+
+        show_layout(ctx, &self.layout);
+
+        ctx.restore()?;
+        Ok(())
+    }
+}
+
+struct StepLayout {
+    time_s: u32,
+    layout_title: TextLayout,
+    layout_note: Option<TextLayout>,
+    layout_ingredients: Option<TextLayout>,
+    layout_utensils: Option<TextLayout>,
+    bounds: Rect<f64>,
+    is_leaf: bool,
+}
+
+impl StepLayout {
+    fn new(
+        ctx: &cairo::Context,
+        hyphen: &hyphenation::Standard,
+        fonts: &Fonts,
+        step: Step,
+    ) -> Result<Self, ()> {
+        let mut height = MARGIN_BOX;
+
+        let text_width = Some((hyphen, NODE_WIDTH - MARGIN_BOX * 2.0));
+
+        let mut layout_title = TextLayout::new(
+            ctx,
+            text_width,
+            &fonts.title,
+            &step.title,
+            LINE_HEIGHT_TITLE,
+        );
+        layout_title.bounds.y = height;
+        height += layout_title.bounds.height;
+
+        let layout_note = step.note.map(|note| {
+            let mut layout = TextLayout::new(ctx, text_width, &fonts.note, &note, LINE_HEIGHT_NOTE);
+            layout.bounds.y = height;
+            height += layout.bounds.height;
             layout
         });
 
-        let ingredients = place_hyphens(hyphen, &step.ingredients.join(", "));
-        let text_ingredients = if !step.ingredients.is_empty() {
-            let attrs = AttrList::new();
-            attrs.insert(AttrInt::new_line_height_absolute(
-                (LINE_HEIGHT_INGREDIENTS * PANGO_SCALE as f64) as i32,
-            ));
-            let layout = create_layout(ctx);
-            layout.set_width(tw);
-            layout.set_font_description(Some(&fonts.ingredients));
-            layout.set_attributes(Some(&attrs));
-            layout.set_text(&ingredients);
-            let (_, lh) = layout.size();
-            height_text += lh as f64 / PANGO_SCALE as f64;
-            Some(layout)
-        } else {
-            None
-        };
-
-        let utensils = place_hyphens(hyphen, &format!("using {}", step.utensils.join(", ")));
-        let text_utensils = if !step.utensils.is_empty() {
-            let attrs = AttrList::new();
-            attrs.insert(AttrInt::new_line_height_absolute(
-                (LINE_HEIGHT_UTENSILS * PANGO_SCALE as f64) as i32,
-            ));
-            let layout = create_layout(ctx);
-            layout.set_width(tw);
-            layout.set_font_description(Some(&fonts.utensils));
-            layout.set_attributes(Some(&attrs));
-            layout.set_text(&utensils);
-            let (_, lh) = layout.size();
-            height_text += lh as f64 / PANGO_SCALE as f64;
-            Some(layout)
-        } else {
-            None
-        };
-
-        if text_ingredients.is_some() || text_utensils.is_some() {
-            height_text += SPACING_TEXT;
+        if !step.ingredients.is_empty() || !step.utensils.is_empty() {
+            height += SPACING_TEXT;
         }
 
+        let layout_ingredients = if !step.ingredients.is_empty() {
+            let ingredients = place_hyphens(hyphen, &step.ingredients.join(", "));
+            let mut layout = TextLayout::new(
+                ctx,
+                text_width,
+                &fonts.ingredients,
+                &ingredients,
+                LINE_HEIGHT_INGREDIENTS,
+            );
+            layout.bounds.y = height;
+            height += layout.bounds.height;
+            Some(layout)
+        } else {
+            None
+        };
+
+        let layout_utensils = if !step.utensils.is_empty() {
+            let utensils = place_hyphens(hyphen, &format!("using {}", step.utensils.join(", ")));
+            let mut layout = TextLayout::new(
+                ctx,
+                text_width,
+                &fonts.utensils,
+                &utensils,
+                LINE_HEIGHT_UTENSILS,
+            );
+            layout.bounds.y = height;
+            height += layout.bounds.height;
+            Some(layout)
+        } else {
+            None
+        };
+
+        height += MARGIN_BOX;
+
         Ok(Self {
-            width,
-            height_time,
-            height_text,
-            text_title,
-            text_note,
-            text_ingredients,
-            text_utensils,
+            time_s: step.time_s as u32,
+            layout_title,
+            layout_note,
+            layout_ingredients,
+            layout_utensils,
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: NODE_WIDTH,
+                height,
+            },
+            is_leaf: step.requires.is_empty(),
         })
     }
-}
 
-impl VisuallySized<f64> for SizedStep {
-    fn get_width(&self) -> f64 {
-        self.width
+    fn draw_connection_background(
+        &self,
+        other: &Self,
+        ctx: &cairo::Context,
+    ) -> Result<(), cairo::Error> {
+        let from_rect = &self.bounds;
+        let to_rect = &other.bounds;
+
+        ctx.save()?;
+        ctx.move_to(from_rect.left(), from_rect.top());
+
+        ctx.curve_to(
+            from_rect.left(),
+            from_rect.top() - SPACING / 1.0,
+            to_rect.left(),
+            to_rect.bottom(),
+            to_rect.left(),
+            to_rect.bottom() - SPACING / 1.0,
+        );
+        ctx.line_to(to_rect.right(), to_rect.bottom());
+        ctx.curve_to(
+            to_rect.right(),
+            to_rect.bottom() + SPACING / 1.0,
+            from_rect.right(),
+            from_rect.top() - SPACING / 1.0,
+            from_rect.right(),
+            from_rect.top(),
+        );
+        ctx.fill()?;
+
+        ctx.restore()?;
+        Ok(())
     }
 
-    fn get_height(&self) -> f64 {
-        self.height_text
-        // self.height_time
+    fn draw_background(&self, ctx: &cairo::Context) -> Result<(), cairo::Error> {
+        let rect = &self.bounds;
+
+        ctx.rectangle(rect.x, rect.y, rect.width, rect.height);
+        ctx.fill()?;
+
+        Ok(())
+    }
+
+    fn draw_line(&self, ctx: &cairo::Context) -> Result<(), cairo::Error> {
+        let connection_offset_y = MARGIN_BOX + FONT_SIZE_TITLE / 2.0;
+        let rect = &self.bounds;
+
+        ctx.save()?;
+        ctx.move_to(rect.left(), rect.top() + connection_offset_y);
+
+        ctx.line_to(rect.left(), rect.bottom() - SPACING);
+        ctx.stroke()?;
+
+        let radius = 3.0;
+        ctx.move_to(rect.left(), rect.top());
+        ctx.arc(
+            rect.left(),
+            rect.top() + connection_offset_y,
+            radius,
+            0.0,
+            f64::consts::PI * 2.0,
+        );
+        ctx.fill()?;
+
+        ctx.restore()?;
+        Ok(())
+    }
+
+    fn draw_connection_line(&self, other: &Self, ctx: &cairo::Context) -> Result<(), cairo::Error> {
+        let connection_offset_y = MARGIN_BOX + FONT_SIZE_TITLE / 2.0;
+        let from_rect = &self.bounds;
+        let to_rect = &other.bounds;
+
+        ctx.save()?;
+        ctx.move_to(from_rect.left(), from_rect.top() + connection_offset_y);
+
+        ctx.curve_to(
+            from_rect.left(),
+            from_rect.top() + connection_offset_y - 50.0,
+            to_rect.left(),
+            to_rect.bottom() - SPACING + 50.0,
+            to_rect.left(),
+            to_rect.bottom() - SPACING,
+        );
+        ctx.stroke()?;
+
+        ctx.restore()?;
+        Ok(())
+    }
+
+    fn draw_text(&self, ctx: &cairo::Context) -> Result<(), cairo::Error> {
+        let rect = &self.bounds;
+
+        ctx.save()?;
+        ctx.translate(rect.x + MARGIN_BOX, rect.y + 1.0);
+
+        self.layout_title.draw(ctx)?;
+
+        if let Some(layout) = &self.layout_note {
+            layout.draw(ctx)?;
+        }
+
+        if let Some(layout) = &self.layout_ingredients {
+            layout.draw(ctx)?;
+        }
+
+        if let Some(layout) = &self.layout_utensils {
+            layout.draw(ctx)?;
+        }
+
+        ctx.restore()?;
+        Ok(())
     }
 }
 
-impl Timed for SizedStep {
-    fn get_duration(&self) -> f64 {
-        self.height_time
+impl Timed for StepLayout {
+    fn get_duration(&self) -> u32 {
+        self.time_s
     }
 }
 
-fn get_layout_size(layout: &pango::Layout) -> (f64, f64) {
-    let (w, h) = layout.size();
-    (w as f64 / PANGO_SCALE as f64, h as f64 / PANGO_SCALE as f64)
+struct GraphLayout {
+    layouts: Vec<StepLayout>,
+    bounds: Rect<f64>,
+}
+
+impl GraphLayout {
+    fn new(
+        ctx: &cairo::Context,
+        hyphen: &hyphenation::Standard,
+        fonts: &Fonts,
+        steps: Vec<Step>,
+        edges: &[(usize, usize)],
+    ) -> Result<Self, LayoutError> {
+        let mut nodes = steps
+            .into_iter()
+            .map(|step| StepLayout::new(ctx, hyphen, fonts, step))
+            .collect::<Result<Vec<_>, ()>>()
+            .unwrap();
+
+        let rects = layout(&nodes, edges)?;
+        let bounds = Rect::bounded_nodes(rects.iter().copied())
+            .expect("`rects` should contain more than one element");
+
+        let mut rows = vec![Vec::<(usize, u32)>::new(); bounds.height as usize];
+        let rects = rects.into_iter().enumerate().collect::<Vec<_>>();
+        for (i, (x, y)) in rects {
+            rows[y as usize].push((i, x));
+        }
+
+        let mut column = vec![0.0; bounds.width as usize];
+        let mut last_row = 0.0;
+
+        for row in rows {
+            let mut height = 0.0f64;
+            for (i, x) in row.iter().copied() {
+                nodes[i].bounds.x = x as f64 * (NODE_WIDTH + SPACING);
+                nodes[i].bounds.y = if nodes[i].is_leaf {
+                    column[x as usize]
+                } else {
+                    last_row
+                };
+                column[x as usize] = nodes[i].bounds.bottom() + SPACING;
+                height = height.max(nodes[i].bounds.bottom());
+            }
+
+            last_row = height;
+
+            for (i, x) in row.iter().copied() {
+                if nodes[i].is_leaf {
+                    nodes[i].bounds.y = last_row - nodes[i].bounds.height;
+                    column[x as usize] = nodes[i].bounds.bottom() + SPACING;
+                }
+            }
+
+            last_row += SPACING;
+        }
+
+        let bounds = Rect::bounded(nodes.iter().map(|node| &node.bounds))
+            .expect("there should be as least one node");
+
+        Ok(Self {
+            layouts: nodes,
+            bounds,
+        })
+    }
+
+    fn draw(
+        &self,
+        ctx: &cairo::Context,
+        colors: &Colors,
+        edges: &[(usize, usize)],
+        show_ids: bool,
+    ) -> Result<(), cairo::Error> {
+        ctx.save()?;
+        ctx.translate(self.bounds.x, self.bounds.y);
+
+        // draw boxes ///////////
+        ctx.set_source(&colors.box_)?;
+        for step in self.layouts.iter() {
+            step.draw_background(ctx)?;
+        }
+
+        for (from, to) in edges.iter().copied() {
+            let from_rect = &self.layouts[from];
+            let to_rect = &self.layouts[to];
+            from_rect.draw_connection_background(to_rect, ctx)?;
+        }
+
+        // draw lines ///////////
+        ctx.set_source(&colors.line)?;
+        for step in self.layouts.iter() {
+            step.draw_line(ctx)?;
+        }
+
+        for (from, to) in edges.iter().copied() {
+            let from_rect = &self.layouts[from];
+            let to_rect = &self.layouts[to];
+            from_rect.draw_connection_line(to_rect, ctx)?;
+        }
+
+        // draw text ////////////
+        ctx.translate(1.5, 1.5);
+        ctx.set_source(&colors.background)?;
+        for step in self.layouts.iter() {
+            step.draw_text(ctx)?;
+        }
+
+        ctx.translate(-1.5, -1.5);
+        ctx.set_source(&colors.text)?;
+        for step in self.layouts.iter() {
+            step.draw_text(ctx)?;
+        }
+
+        if show_ids {
+            ctx.set_source_rgb(1.0, 0.0, 0.0);
+            for (i, step) in self.layouts.iter().enumerate() {
+                let rect = &step.bounds;
+                ctx.move_to(rect.left(), rect.bottom());
+                ctx.show_text(&i.to_string())?;
+            }
+        }
+
+        ctx.restore()?;
+
+        Ok(())
+    }
+}
+
+struct IngredientsLayout {
+    layouts: Vec<(Option<TextLayout>, TextLayout)>,
+    bounds: Rect<f64>,
+}
+
+impl IngredientsLayout {
+    fn new(ctx: &cairo::Context, fonts: &Fonts, ingredients: Vec<Ingredient>) -> Self {
+        let mut width_amount = 0.0f64;
+        let mut width_name = 0.0f64;
+        let mut height_total = 0.0f64;
+
+        let mut layouts = ingredients
+            .into_iter()
+            .map(|ingredient| {
+                let mut height = 0.0f64;
+
+                let layout_amount = ingredient.amount.map(|amount| {
+                    let mut layout = TextLayout::new(
+                        ctx,
+                        None,
+                        &fonts.ingredients,
+                        &amount,
+                        LINE_HEIGHT_INGREDIENTS,
+                    );
+                    layout.bounds.y = height_total;
+
+                    width_amount = width_amount.max(layout.bounds.width);
+                    height = layout.bounds.height;
+
+                    layout
+                });
+
+                let name = match ingredient.comment {
+                    Some(comment) => format!("{} ({})", ingredient.name, comment),
+                    None => ingredient.name,
+                };
+                let mut layout_name = TextLayout::new(
+                    ctx,
+                    None,
+                    &fonts.ingredients,
+                    &name,
+                    LINE_HEIGHT_INGREDIENTS,
+                );
+                layout_name.bounds.y = height_total;
+
+                width_name = width_name.max(layout_name.bounds.width);
+                height = height.max(layout_name.bounds.height);
+                height_total += height;
+
+                (layout_amount, layout_name)
+            })
+            .collect::<Vec<_>>();
+
+        for (layout_amount, layout_name) in layouts.iter_mut() {
+            if let Some(layout_amount) = layout_amount {
+                layout_amount.bounds.x = width_amount - layout_amount.bounds.width;
+            }
+            layout_name.bounds.x = width_amount + SPACING_TEXT;
+        }
+
+        IngredientsLayout {
+            layouts,
+            bounds: Rect::sized(width_amount + SPACING_TEXT + width_name, height_total),
+        }
+    }
+
+    fn draw(&self, ctx: &cairo::Context) -> Result<(), cairo::Error> {
+        ctx.save()?;
+        ctx.translate(self.bounds.x, self.bounds.y);
+
+        for (amount, name) in self.layouts.iter() {
+            if let Some(amount) = amount {
+                amount.draw(ctx)?;
+            }
+            name.draw(ctx)?;
+        }
+
+        ctx.restore()?;
+
+        Ok(())
+    }
 }
 
 /// Generate an image for a recipe with a name, ingredients, and a graph for the instructions
@@ -314,242 +660,57 @@ fn main_() -> Result<(), MainError> {
 
     let file = File::open(args.recipe)?;
     let recipe: Recipe = ron::de::from_reader(&file)?;
+    let edges = recipe.edges();
 
     let en_us = hyphenation::Standard::from_embedded(hyphenation::Language::EnglishUS)?;
 
-    let paint_surface = ImageSurface::create(cairo::Format::Rgb24, 1, 1)?;
-    let paint_ctx = Context::new(&paint_surface)?;
-    let colors = Colors::new(&paint_ctx);
+    let surface = ImageSurface::create(cairo::Format::Rgb24, 1, 1)?;
+    let ctx = Context::new(&surface)?;
+    let colors = Colors::new(&ctx);
     let fonts = Fonts::new();
 
-    let edges = recipe.edges();
-    let nodes = recipe
-        .steps
-        .into_iter()
-        .map(|step| SizedStep::new(step, NODE_WIDTH, &paint_ctx, &fonts, &en_us))
-        .collect::<Result<Vec<_>, ()>>()
-        .unwrap();
+    let mut layout_ingredients = IngredientsLayout::new(&ctx, &fonts, recipe.ingredients);
 
-    let rects = layout(&nodes, &edges, SPACING, SPACING)?;
-    let bounds = Rect::bounded(&rects).expect("`rects` should contain more than one element");
-    let nodes = nodes.into_iter().zip(rects).collect::<Vec<_>>();
+    let mut layout_graph = GraphLayout::new(&ctx, &en_us, &fonts, recipe.steps, &edges)?;
+    layout_graph.bounds.x = layout_ingredients.bounds.width + SPACING;
 
-    let attrs = AttrList::new();
-    attrs.insert(AttrInt::new_line_height_absolute(
-        (LINE_HEIGHT_RECIPE_TITLE * PANGO_SCALE as f64) as i32,
-    ));
-    let text_recipe_title = create_layout(&paint_ctx);
-    text_recipe_title.set_width((bounds.width * PANGO_SCALE as f64) as i32);
-    text_recipe_title.set_font_description(Some(&fonts.recipe_title));
-    text_recipe_title.set_attributes(Some(&attrs));
-    text_recipe_title.set_text(&recipe.name);
-    let (_, lh) = text_recipe_title.size();
-    let height_recipe_title = lh as f64 / PANGO_SCALE as f64;
+    let layout_name = TextLayout::new(
+        &ctx,
+        Some((
+            &en_us,
+            layout_ingredients.bounds.height + SPACING + layout_graph.bounds.width,
+        )),
+        &fonts.recipe_title,
+        &recipe.name,
+        LINE_HEIGHT_RECIPE_TITLE,
+    );
 
-    let mut width_ingredients = (0.0f64, 0.0f64);
-    let mut height_ingredients = 0.0;
-    let mut text_ingredients = Vec::<(Option<pango::Layout>, pango::Layout)>::new();
-    let attrs = AttrList::new();
-    attrs.insert(AttrInt::new_line_height_absolute(
-        (LINE_HEIGHT_INGREDIENTS * PANGO_SCALE as f64) as i32,
-    ));
-    for ingredient in recipe.ingredients {
-        let mut height = 0.0;
-
-        let text_amount = ingredient.amount.map(|amount| {
-            let layout = create_layout(&paint_ctx);
-            layout.set_font_description(Some(&fonts.ingredients));
-            layout.set_attributes(Some(&attrs));
-            layout.set_text(&amount);
-            let (lw, lh) = layout.size();
-            let width = lw as f64 / PANGO_SCALE as f64;
-            width_ingredients.0 = width_ingredients.0.max(width);
-            height = lh as f64 / PANGO_SCALE as f64;
-            layout
-        });
-
-        let name = match ingredient.comment {
-            Some(comment) => format!("{} ({})", ingredient.name, comment),
-            None => ingredient.name,
-        };
-        let text_name = create_layout(&paint_ctx);
-        text_name.set_font_description(Some(&fonts.ingredients));
-        text_name.set_attributes(Some(&attrs));
-        text_name.set_text(&name);
-        let (lw, lh) = text_name.size();
-        let width = lw as f64 / PANGO_SCALE as f64;
-        width_ingredients.1 = width_ingredients.1.max(width);
-        height = height.max(lh as f64 / PANGO_SCALE as f64);
-
-        height_ingredients += height;
-        text_ingredients.push((text_amount, text_name));
-    }
+    layout_ingredients.bounds.y = layout_name.bounds.height + SPACING;
+    layout_graph.bounds.y = layout_name.bounds.height + SPACING;
 
     let surface = ImageSurface::create(
         cairo::Format::Rgb24,
-        (MARGIN_PAGE * 2.0
-            + width_ingredients.0
-            + SPACING_TEXT
-            + width_ingredients.1
-            + SPACING
-            + bounds.width)
+        (MARGIN_PAGE * 2.0 + layout_ingredients.bounds.width + SPACING + layout_graph.bounds.width)
             .ceil() as i32,
         (MARGIN_PAGE * 2.0
-            + height_recipe_title
+            + layout_name.bounds.height
             + SPACING
-            + f64::max(height_ingredients, bounds.height))
+            + f64::max(layout_ingredients.bounds.height, layout_graph.bounds.height))
         .ceil() as i32,
     )?;
     let ctx = Context::new(&surface)?;
     ctx.translate(MARGIN_PAGE, MARGIN_PAGE);
 
-    // draw background //////
     ctx.set_source(&colors.background)?;
     ctx.paint()?;
 
-    // draw title ///////////
     ctx.set_source(&colors.text)?;
-    ctx.move_to(0.0, 0.0);
-    show_layout(&ctx, &text_recipe_title);
-    ctx.translate(0.0, lh as f64 / PANGO_SCALE as f64 + SPACING);
 
-    // draw ingredients /////
-    let mut y = 0.0;
-    for (amount, name) in text_ingredients {
-        let mut height = 0.0;
-        if let Some(amount) = amount {
-            let (lw, lh) = get_layout_size(&amount);
-            ctx.move_to(width_ingredients.0 - lw, y);
-            show_layout(&ctx, &amount);
-            height = lh;
-        }
-        ctx.move_to(width_ingredients.0 + SPACING_TEXT, y);
-        show_layout(&ctx, &name);
-        height = height.max(get_layout_size(&name).1);
-        y += height;
-    }
-    ctx.translate(
-        width_ingredients.0 + SPACING_TEXT + width_ingredients.1 + SPACING,
-        0.0,
-    );
+    layout_name.draw(&ctx)?;
 
-    // draw boxes ///////////
-    ctx.set_source(&colors.box_)?;
-    for (step, rect) in nodes.iter() {
-        ctx.rectangle(rect.x, rect.y, rect.width, step.height_text);
-        ctx.fill()?;
-    }
+    layout_ingredients.draw(&ctx)?;
 
-    for (from, to) in edges.iter().copied() {
-        let from_rect = &nodes[from].1;
-        let to_rect = &nodes[to].1;
-        ctx.move_to(from_rect.left(), from_rect.top());
-        ctx.curve_to(
-            from_rect.left(),
-            from_rect.top() - SPACING / 1.0,
-            to_rect.left(),
-            to_rect.bottom(),
-            to_rect.left(),
-            to_rect.bottom() - SPACING / 1.0,
-        );
-        ctx.line_to(to_rect.right(), to_rect.bottom());
-        ctx.curve_to(
-            to_rect.right(),
-            to_rect.bottom() + SPACING / 1.0,
-            from_rect.right(),
-            from_rect.top() - SPACING / 1.0,
-            from_rect.right(),
-            from_rect.top(),
-        );
-        ctx.fill()?;
-    }
-
-    // draw lines ///////////
-    let connection_offset_y = MARGIN_BOX + FONT_SIZE_TITLE / 2.0;
-    ctx.set_source(&colors.line)?;
-    for (_step, rect) in nodes.iter() {
-        ctx.move_to(rect.left(), rect.top() + connection_offset_y);
-        ctx.line_to(rect.left(), rect.bottom() - SPACING);
-        ctx.stroke()?;
-        let radius = 3.0;
-        ctx.move_to(rect.left(), rect.top());
-        ctx.arc(
-            rect.left(),
-            rect.top() + connection_offset_y,
-            radius,
-            0.0,
-            f64::consts::PI * 2.0,
-        );
-        ctx.fill()?;
-    }
-
-    for (from, to) in edges.iter().copied() {
-        let from_rect = &nodes[from].1;
-        let to_rect = &nodes[to].1;
-        ctx.move_to(from_rect.left(), from_rect.top() + connection_offset_y);
-        ctx.curve_to(
-            from_rect.left(),
-            from_rect.top() + connection_offset_y - 50.0,
-            to_rect.left(),
-            to_rect.bottom() - SPACING + 50.0,
-            to_rect.left(),
-            to_rect.bottom() - SPACING,
-        );
-        ctx.stroke()?;
-    }
-
-    // draw text ////////////
-    for (step, rect) in nodes.iter() {
-        let mut y = rect.y + MARGIN_BOX + 1.0;
-
-        ctx.move_to(rect.x + 1.5 + MARGIN_BOX, y + 1.5);
-        ctx.set_source(&colors.background)?;
-        show_layout(&ctx, &step.text_title);
-        ctx.move_to(rect.x + MARGIN_BOX, y);
-        ctx.set_source(&colors.text)?;
-        show_layout(&ctx, &step.text_title);
-        y += step.text_title.size().1 as f64 / PANGO_SCALE as f64;
-
-        if let Some(text) = &step.text_note {
-            ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
-            ctx.set_source(&colors.background)?;
-            show_layout(&ctx, text);
-            ctx.move_to(rect.x + MARGIN_BOX, y);
-            ctx.set_source(&colors.text)?;
-            show_layout(&ctx, text);
-            y += text.size().1 as f64 / PANGO_SCALE as f64;
-        }
-
-        y += SPACING_TEXT;
-
-        if let Some(text) = &step.text_ingredients {
-            ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
-            ctx.set_source(&colors.background)?;
-            show_layout(&ctx, text);
-            ctx.move_to(rect.x + MARGIN_BOX, y);
-            ctx.set_source(&colors.text)?;
-            show_layout(&ctx, text);
-            y += text.size().1 as f64 / PANGO_SCALE as f64;
-        }
-
-        if let Some(text) = &step.text_utensils {
-            ctx.move_to(rect.x + 1.0 + MARGIN_BOX, y + 1.0);
-            ctx.set_source(&colors.background)?;
-            show_layout(&ctx, text);
-            ctx.move_to(rect.x + MARGIN_BOX, y);
-            ctx.set_source(&colors.text)?;
-            show_layout(&ctx, text);
-            // y += text.size().1 as f64 / PANGO_SCALE as f64;
-        }
-    }
-
-    if args.show_ids {
-        ctx.set_source_rgb(1.0, 0.0, 0.0);
-        for (i, (_step, rect)) in nodes.iter().enumerate() {
-            ctx.move_to(rect.left(), rect.bottom());
-            ctx.show_text(&i.to_string())?;
-        }
-    }
+    layout_graph.draw(&ctx, &colors, &edges, args.show_ids)?;
 
     let mut file = File::create("output.png")?;
     surface.write_to_png(&mut file)?;
