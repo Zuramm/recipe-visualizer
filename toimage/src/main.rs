@@ -607,6 +607,8 @@ struct Args {
     /// Path to recipe file in ron format
     recipe: PathBuf,
 
+    output: Option<PathBuf>,
+
     /// Show the id of each node; for debugging purposes
     #[arg(long)]
     show_ids: bool,
@@ -658,7 +660,7 @@ fn main_() -> Result<(), MainError> {
 
     let args = Args::parse();
 
-    let file = File::open(args.recipe)?;
+    let file = File::open(&args.recipe)?;
     let recipe: Recipe = ron::de::from_reader(&file)?;
     let edges = recipe.edges();
 
@@ -712,7 +714,11 @@ fn main_() -> Result<(), MainError> {
 
     layout_graph.draw(&ctx, &colors, &edges, args.show_ids)?;
 
-    let mut file = File::create("output.png")?;
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or(args.recipe.with_extension("png"));
+    let mut file = File::create(output_path)?;
     surface.write_to_png(&mut file)?;
 
     Ok(())

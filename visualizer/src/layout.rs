@@ -495,7 +495,7 @@ where
         for i in path {
             // Push all laid out children of the current node up the resolve the overlap. Repeat
             // until the is no overlap.
-            while let Some((j, _overlap)) = layout
+            while layout
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| i.index() != *j)
@@ -504,6 +504,7 @@ where
                     a == *b
                 })
                 .max_by_key(|(_, pos)| *pos)
+                .is_some()
             {
                 let mut shift = i;
                 while !main_path.contains(&shift) {
