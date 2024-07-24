@@ -1,5 +1,5 @@
 [package]
-name = "recipe-gui"
+name = "recipegui"
 version = "0.1.0"
 edition = "2021"
 

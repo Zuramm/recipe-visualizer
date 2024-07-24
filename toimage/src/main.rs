@@ -3,12 +3,12 @@ use clap::Parser;
 use hyphenation::{Hyphenator, Load};
 use pango::{ffi::PANGO_SCALE, AttrInt, AttrList, FontDescription};
 use pangocairo::functions::{create_layout, show_layout};
-use std::{f64, fs::File, io, path::PathBuf};
-use thiserror::Error;
-use visualizer::{
+use recipe_visualizer::{
     layout::{layout, LayoutError, Rect, Timed},
     Ingredient, Recipe, Step,
 };
+use std::{f64, fs::File, io, path::PathBuf};
+use thiserror::Error;
 
 const COLOR_WHITE: u32 = 0xffffffff;
 const COLOR_BLACK: u32 = 0xff000000;

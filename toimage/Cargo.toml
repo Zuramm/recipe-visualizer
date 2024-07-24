@@ -1,5 +1,5 @@
 [package]
-name = "recipe-toimage"
+name = "recipetoimage"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,4 +13,4 @@ pango = { version = "0.20.0", features = ["v1_52"] }
 pangocairo = "0.20.0"
 ron = "0.8.1"
 thiserror = "1.0.62"
-recipe-visualizer = { version = "0.1.0", path = "../visualizer" }
+recipe_visualizer = { version = "0.1.0", path = "../visualizer" }
