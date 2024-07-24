@@ -518,15 +518,19 @@ where
                     }
                     Control::<()>::Continue
                 });
+                break;
             }
         }
     }
 
     let bounds = Rect::bounded_nodes(layout.iter().copied()).expect("at least 1 node to exist");
 
+    println!("{layout:?}");
+    println!("{bounds:?}");
+
     Ok(layout
         .into_iter()
-        .map(|(x, y)| (x, bounds.height - (y + 1)))
+        .map(|(x, y)| (x, bounds.bottom() - (y + 1)))
         .collect::<Vec<_>>())
 }
 
@@ -659,16 +663,47 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Clone, Copy)]
-    struct Size(u32);
+    mod bounded_nodes {
+        use super::*;
 
-    impl Timed for Size {
-        fn get_duration(&self) -> u32 {
-            self.0
+        #[test]
+        fn zero_nodes() {
+            let nodes = [];
+
+            let result = Rect::bounded_nodes(nodes.into_iter());
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn one_node() {
+            let nodes = [(1, 2)];
+
+            let result = Rect::bounded_nodes(nodes.into_iter());
+            assert_eq!(result, Some(Rect::from_sides(1, 2, 2, 3)));
+        }
+
+        #[test]
+        fn two_nodes() {
+            let nodes = [(1, 2), (3, 4)];
+
+            let result = Rect::bounded_nodes(nodes.into_iter());
+            assert_eq!(result, Some(Rect::from_sides(1, 2, 4, 5)));
         }
     }
 
-    macro_rules! assert_graph {
+    mod layout {
+        use super::*;
+
+        #[derive(Clone, Copy)]
+        struct Size(u32);
+
+        impl Timed for Size {
+            fn get_duration(&self) -> u32 {
+                self.0
+            }
+        }
+
+        macro_rules! assert_graph {
         ($a:expr; is above $b:expr; in $result:expr) => {
             assert!(
                 $result[$a].1 + 1 == $result[$b].1,
@@ -690,139 +725,140 @@ mod tests {
         };
     }
 
-    #[test]
-    fn zero_nodes() -> Result<(), LayoutError> {
-        let nodes: Vec<Size> = vec![];
-        let edges = vec![];
+        #[test]
+        fn zero_nodes() -> Result<(), LayoutError> {
+            let nodes: Vec<Size> = vec![];
+            let edges = vec![];
 
-        let result = layout(&nodes, &edges)?;
-        assert_eq!(result, vec![]);
-        Ok(())
-    }
+            let result = layout(&nodes, &edges)?;
+            assert_eq!(result, vec![]);
+            Ok(())
+        }
 
-    #[test]
-    fn one_node() -> Result<(), LayoutError> {
-        // 0
-        let nodes = vec![Size(1)];
-        let edges = vec![];
+        #[test]
+        fn one_node() -> Result<(), LayoutError> {
+            // 0
+            let nodes = vec![Size(1)];
+            let edges = vec![];
 
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result, vec![(0, 0)]);
-        Ok(())
-    }
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result, vec![(0, 0)]);
+            Ok(())
+        }
 
-    #[test]
-    fn two_nodes() -> Result<(), LayoutError> {
-        // 1
-        // |
-        // 0
-        let nodes = vec![Size(1); 2];
-        let edges = vec![(0, 1)];
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 2);
-        assert_graph!(1; is above 0; in result);
-        assert_graph!(0, 1; are in column 0; in result);
-        Ok(())
-    }
+        #[test]
+        fn two_nodes() -> Result<(), LayoutError> {
+            // 1
+            // |
+            // 0
+            let nodes = vec![Size(1); 2];
+            let edges = vec![(0, 1)];
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result.len(), 2);
+            assert_graph!(1; is above 0; in result);
+            assert_graph!(0, 1; are in column 0; in result);
+            Ok(())
+        }
 
-    #[test]
-    fn simple_branch() -> Result<(), LayoutError> {
-        // 2 1
-        // |/
-        // 0
-        let nodes = vec![Size(1), Size(1), Size(2)];
-        let edges = vec![(0, 1), (0, 2)];
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 3);
-        assert_graph!(1; is above 0; in result);
-        assert_graph!(2; is above 0; in result);
-        assert_graph!(0, 2; are in column 0; in result);
-        assert_graph!(1; are in column 1; in result);
-        Ok(())
-    }
+        #[test]
+        fn simple_branch() -> Result<(), LayoutError> {
+            // 2 1
+            // |/
+            // 0
+            let nodes = vec![Size(1), Size(1), Size(2)];
+            let edges = vec![(0, 1), (0, 2)];
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result.len(), 3);
+            assert_graph!(1; is above 0; in result);
+            assert_graph!(2; is above 0; in result);
+            assert_graph!(0, 2; are in column 0; in result);
+            assert_graph!(1; are in column 1; in result);
+            Ok(())
+        }
 
-    #[test]
-    fn keep_node_order_intact_if_ambiguous() -> Result<(), LayoutError> {
-        // 1 2
-        // |/
-        // 0
-        let nodes = vec![Size(1), Size(1), Size(1)];
-        let edges = vec![(0, 1), (0, 2)];
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 3);
-        assert_graph!(1; is above 0; in result);
-        assert_graph!(2; is above 0; in result);
-        assert_graph!(0, 1; are in column 0; in result);
-        assert_graph!(2; are in column 1; in result);
-        Ok(())
-    }
+        #[test]
+        fn keep_node_order_intact_if_ambiguous() -> Result<(), LayoutError> {
+            // 1 2
+            // |/
+            // 0
+            let nodes = vec![Size(1), Size(1), Size(1)];
+            let edges = vec![(0, 1), (0, 2)];
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result.len(), 3);
+            assert_graph!(1; is above 0; in result);
+            assert_graph!(2; is above 0; in result);
+            assert_graph!(0, 1; are in column 0; in result);
+            assert_graph!(2; are in column 1; in result);
+            Ok(())
+        }
 
-    #[test]
-    fn branch_arm_with_more_nodes_longer() -> Result<(), LayoutError> {
-        // 2
-        // |
-        // 1 3
-        // |/
-        // 0
-        let nodes = vec![Size(1); 4];
-        let edges = vec![(0, 1), (1, 2), (0, 3)];
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 4);
-        assert_graph!(1; is above 0; in result);
-        assert_graph!(2; is above 1; in result);
-        assert_graph!(3; is above 0; in result);
-        assert_graph!(0, 1, 2; are in column 0; in result);
-        assert_graph!(3; are in column 1; in result);
-        Ok(())
-    }
+        #[test]
+        fn branch_arm_with_more_nodes_longer() -> Result<(), LayoutError> {
+            // 2
+            // |
+            // 1 3
+            // |/
+            // 0
+            let nodes = vec![Size(1); 4];
+            let edges = vec![(0, 1), (1, 2), (0, 3)];
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result.len(), 4);
+            assert_graph!(1; is above 0; in result);
+            assert_graph!(2; is above 1; in result);
+            assert_graph!(3; is above 0; in result);
+            assert_graph!(0, 1, 2; are in column 0; in result);
+            assert_graph!(3; are in column 1; in result);
+            Ok(())
+        }
 
-    #[test]
-    fn branch_arm_with_more_nodes_shorter() -> Result<(), LayoutError> {
-        //   2
-        //   |
-        // 1 3
-        // |/
-        // 0
-        let nodes = vec![Size(1), Size(3), Size(1), Size(1)];
-        let edges = vec![(0, 1), (1, 2), (0, 3)];
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 4);
-        assert_graph!(1; is above 0; in result);
-        assert_graph!(2; is above 1; in result);
-        assert_graph!(3; is above 0; in result);
-        assert_graph!(0, 1, 2; are in column 0; in result);
-        assert_graph!(3; are in column 1; in result);
-        Ok(())
-    }
+        #[test]
+        fn branch_arm_with_more_nodes_shorter() -> Result<(), LayoutError> {
+            //   2
+            //   |
+            // 1 3
+            // |/
+            // 0
+            let nodes = vec![Size(1), Size(3), Size(1), Size(1)];
+            let edges = vec![(0, 1), (1, 2), (0, 3)];
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result.len(), 4);
+            assert_graph!(1; is above 0; in result);
+            assert_graph!(2; is above 1; in result);
+            assert_graph!(3; is above 0; in result);
+            assert_graph!(0, 1, 2; are in column 0; in result);
+            assert_graph!(3; are in column 1; in result);
+            Ok(())
+        }
 
-    // When placing nodes an tightly as possible, nodes 3 and 5 overlap. This overlap should be
-    // resolved by pushing nodes 1, 2, and 3 upwards.
-    #[test]
-    fn vertical_overlap() -> Result<(), LayoutError> {
-        // 2 3
-        // |/
-        // 1 5
-        // | |
-        // | 4
-        // |/
-        // 0
-        let nodes = vec![Size(1), Size(1), Size(2), Size(1), Size(1)];
-        let edges = vec![(0, 1), (1, 2), (1, 3), (0, 4), (4, 5)];
-        let result = layout(&nodes, &edges)?;
-        println!("result: {result:?}");
-        assert_eq!(result.len(), 5);
-        assert_graph!(2; is above 1; in result);
-        assert_graph!(3; is above 1; in result);
-        assert_graph!(4; is above 0; in result);
-        assert_graph!(5; is above 4; in result);
-        assert_graph!(0, 1, 2; are in column 0; in result);
-        assert_graph!(4, 5, 3; are in column 1; in result);
-        Ok(())
+        // When placing nodes an tightly as possible, nodes 3 and 5 overlap. This overlap should be
+        // resolved by pushing nodes 1, 2, and 3 upwards.
+        #[test]
+        fn vertical_overlap() -> Result<(), LayoutError> {
+            // 2 3
+            // |/
+            // 1 5
+            // | |
+            // | 4
+            // |/
+            // 0
+            let nodes = vec![Size(1), Size(1), Size(2), Size(1), Size(1), Size(1)];
+            let edges = vec![(0, 1), (1, 2), (1, 3), (0, 4), (4, 5)];
+            let result = layout(&nodes, &edges)?;
+            println!("result: {result:?}");
+            assert_eq!(result.len(), 6);
+            assert_graph!(2; is above 1; in result);
+            assert_graph!(3; is above 1; in result);
+            assert_graph!(4; is above 0; in result);
+            assert_graph!(5; is above 4; in result);
+            assert_graph!(0, 1, 2; are in column 0; in result);
+            assert_graph!(4, 5, 3; are in column 1; in result);
+            Ok(())
+        }
     }
 }
