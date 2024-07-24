@@ -1,5 +1,5 @@
 [package]
-name = "recipe_visualizer"
+name = "recipe-gui"
 version = "0.1.0"
 edition = "2021"
 
